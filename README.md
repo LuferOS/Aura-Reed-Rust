@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=34&duration=2800&pause=1000&color=A855F7&center=true&vCenter=true&multiline=true&width=740&height=115&lines=%E2%9A%A1+AURA+REED+RUST+v2.5;%7E21.7+MB+RAM+%E2%80%A2+0.002+ms+%E2%80%A2+100%25+Nativo" alt="Aura Reed Rust" />
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=800&size=34&duration=2800&pause=1000&color=A855F7&center=true&vCenter=true&multiline=true&width=740&height=115&lines=%E2%9A%A1+AURA+REED+RUST+v3.1.1;%7E21.7+MB+RAM+%E2%80%A2+0.002+ms+%E2%80%A2+100%25+Nativo" alt="Aura Reed Rust" />
 
 <p>
   <a href="https://github.com/LuferOS/Aura-Reed-Rust"><img src="https://img.shields.io/badge/Rust-2021-orange?style=for-the-badge&logo=rust&logoColor=white" alt="Rust" /></a>
