@@ -6,6 +6,7 @@ mod debug;
 mod handler;
 mod lang;
 mod snipe;
+mod ui;
 
 use baileys_rs::signal::LibSignalRepository;
 use baileys_rs::socket::{MessagesRecvSocket, MessagesSocket, RecvEvent, SubBotEvent, SubBotManager, WaSocket};
@@ -329,8 +330,7 @@ async fn run_bot(cfg: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
                                 return;
                             };
                             st_c.debug.active_tasks.fetch_add(1, Ordering::Relaxed);
-                            st_c.debug.total_commands.fetch_add(1, Ordering::Relaxed);
-                            let _ = tokio::time::timeout(
+                                                        let _ = tokio::time::timeout(
                                 Duration::from_secs(25),
                                 handler::handle_message(st_c.clone(), sock_c, message, is_offline),
                             )

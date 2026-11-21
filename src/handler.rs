@@ -195,9 +195,9 @@ pub async fn handle_message(
     let raw_text_opt = extract_message_text(proto_msg);
 
     let creds = messages.socket.creds().await;
-    let bot_jid = creds.me.as_ref().map(|m| m.id.clone());
+    let bot_jid = creds.me.as_ref().map(|m| crate::ui::normalize_jid(&m.id));
     let from_me = message.key.from_me == Some(true);
-    let sender = if from_me {
+    let raw_sender = if from_me {
         bot_jid.clone().unwrap_or_else(|| from.clone())
     } else {
         message
@@ -206,8 +206,15 @@ pub async fn handle_message(
             .clone()
             .unwrap_or_else(|| from.clone())
     };
-
-    let user = state.db.ensure_user(&sender, message.push_name.as_deref());
+    let sender = crate::ui::normalize_jid(&raw_sender);
+    let push_name = message
+        .push_name
+        .clone()
+        .or_else(|| if from_me { creds.me.as_ref().and_then(|m| m.name.clone()) } else { None });
+    if let Some(ref pn) = push_name {
+        state.db.sync_username(&sender, pn);
+    }
+    let user = state.db.ensure_user(&sender, push_name.as_deref());
     let is_owner = user.role == "owner" || is_default_owner(&sender);
     let is_group = from.ends_with("@g.us");
 
@@ -284,6 +291,7 @@ pub async fn handle_message(
         message,
         from,
         sender: sender.clone(),
+        push_name,
         bot_jid,
         is_group,
         is_owner,
@@ -328,6 +336,10 @@ pub async fn handle_message(
     };
 
     if handled {
+        state
+            .debug
+            .total_commands
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         state.db.increment_cmd_count(&sender);
         state.debug.log(
             "cmd",

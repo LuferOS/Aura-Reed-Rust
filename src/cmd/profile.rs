@@ -1,15 +1,13 @@
 use baileys_rs::types::ProfilePictureType;
+use crate::config::DEFAULT_BOT_NAME;
 use crate::context::{CommandContext, PendingProposal};
+use crate::ui::{box_section, footer_tag, format_coins, format_number, fyt_bold, jid_tag};
 use std::time::{Duration, Instant};
 
 const SUPPORTED_LANGS: &[&str] = &[
     "en", "es", "br", "cn", "cz", "de", "fr", "gr", "hi", "hu", "id", "it", "jp", "kr", "nl",
     "ph", "pl", "ro", "ru", "sv", "th", "uk", "vn",
 ];
-
-fn jid_tag(jid: &str) -> &str {
-    jid.split('@').next().unwrap_or(jid)
-}
 
 fn valid_date(s: &str) -> bool {
     let parts: Vec<&str> = s.split('/').collect();
@@ -40,16 +38,44 @@ fn valid_date(s: &str) -> bool {
     (1..=max_d).contains(&d)
 }
 
+fn calc_age(birth: &str) -> Option<u32> {
+    let parts: Vec<&str> = birth.split('/').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let y: u32 = parts[2].parse().ok()?;
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let cur_year = 1970 + (now_secs / 31_556_952) as u32;
+    cur_year.checked_sub(y)
+}
+
 pub async fn run(ctx: &CommandContext) -> bool {
     match ctx.cmd_name.as_str() {
         "profile" | "perfil" | "me" => {
             let target = ctx.target_jid();
             let u = ctx.state.db.ensure_user(&target, None);
+            let tag = jid_tag(&target);
             let display_name = u
                 .name
                 .as_deref()
                 .or(u.username.as_deref())
+                .or_else(|| if target == ctx.sender { ctx.push_name.as_deref() } else { None })
                 .unwrap_or("Sin nombre");
+            let gender = if u.genre == "Unknown" {
+                "No definido"
+            } else {
+                u.genre.as_str()
+            };
+            let birth = u.birth_date.as_deref().unwrap_or("No definido");
+            let age_str = u
+                .birth_date
+                .as_deref()
+                .and_then(calc_age)
+                .map(|a| format!("{} anos", a))
+                .unwrap_or_else(|| "No definida".to_string());
             let partner = u
                 .marriage_to
                 .as_deref()
@@ -59,51 +85,99 @@ pub async fn run(ctx: &CommandContext) -> bool {
             if let Some(ref spouse) = u.marriage_to {
                 mentions.push(spouse.clone());
             }
-            ctx.reply_with_mentions(
-                format!(
-                    "*Perfil de @{}*\n\
-                    Nombre: {}\n\
-                    Rol: {}\n\
-                    Genero: {}\n\
-                    Cumpleanos: {}\n\
-                    Pareja: {}\n\
-                    Bio: {}\n\
-                    Idioma: {}\n\
-                    Aura: {} XP (Nivel {})\n\
-                    Bolsillo: {} | Banco: {}\n\
-                    Comandos usados: {}",
-                    jid_tag(&target),
-                    display_name,
-                    u.role,
-                    u.genre,
-                    u.birth_date.as_deref().unwrap_or("No definido"),
-                    partner,
-                    u.description,
-                    u.user_lang,
-                    u.aura_points,
-                    u.aura_level,
-                    u.coins,
-                    u.bank,
-                    u.cmds_used_count
-                ),
-                mentions,
-            )
-            .await;
+
+            let sec_head = box_section(
+                "👤",
+                "PERFIL",
+                &[format!("📋 {} @{}", fyt_bold("SOBRE"), tag)],
+            );
+            let sec_bio = box_section("", "BIOGRAFIA", &[u.description.clone()]);
+            let sec_basic = box_section(
+                "",
+                "INFO BASICA",
+                &[
+                    format!("👤 {} › {}", fyt_bold("Nombre"), display_name),
+                    format!("🆔 {} › WB{}", fyt_bold("ID"), tag),
+                    format!("⚧️ {} › {}", fyt_bold("Genero"), gender),
+                    format!("🎂 {} › {}", fyt_bold("Cumpleanos"), birth),
+                    format!("🎈 {} › {}", fyt_bold("Edad"), age_str),
+                    format!("💍 {} › {}", fyt_bold("Pareja"), partner),
+                ],
+            );
+            let sec_rank = box_section(
+                "",
+                "RANGO",
+                &[
+                    format!("📊 {} › {}", fyt_bold("Nivel Aura"), u.aura_level),
+                    format!("✨ {} › {}", fyt_bold("Puntos Aura"), format_number(u.aura_points)),
+                    format!("💵 {} › {}", fyt_bold("Cartera"), format_coins(u.coins)),
+                    format!("🏦 {} › {}", fyt_bold("Banco"), format_coins(u.bank)),
+                ],
+            );
+
+            let caption = format!(
+                "{}\n\n{}\n\n{}\n\n{}\n\n{}",
+                sec_head,
+                sec_bio,
+                sec_basic,
+                sec_rank,
+                footer_tag(DEFAULT_BOT_NAME)
+            );
+
+            let sent_with_photo = match ctx
+                .messages
+                .socket
+                .profile_picture_url(&target, ProfilePictureType::Image, None, Some(3_500))
+                .await
+            {
+                Ok(Some(url)) => match ctx.state.http.get(&url).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        let mime = resp
+                            .headers()
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("image/jpeg")
+                            .to_string();
+                        match resp.bytes().await {
+                            Ok(bytes) => ctx
+                                .send_image_bytes(
+                                    bytes.to_vec(),
+                                    Some(caption.clone()),
+                                    mentions.clone(),
+                                    &mime,
+                                )
+                                .await
+                                .is_ok(),
+                            Err(_) => false,
+                        }
+                    }
+                    _ => false,
+                },
+                _ => false,
+            };
+
+            if !sent_with_photo {
+                ctx.reply_with_mentions(caption, mentions).await;
+            }
             true
         }
         "lvl" | "level" | "nivel" | "rango" => {
             let target = ctx.target_jid();
             let u = ctx.state.db.ensure_user(&target, None);
-            ctx.reply_with_mentions(
-                format!(
-                    "*Nivel Aura de @{}*\nAura XP: *{}*\nNivel: *{}*",
-                    jid_tag(&target),
-                    u.aura_points,
-                    u.aura_level
+            let body = format!(
+                "{}\n\n{}",
+                box_section(
+                    "✨",
+                    "NIVEL AURA",
+                    &[
+                        format!("> Usuario › @{}", jid_tag(&target)),
+                        format!("> Nivel › *{}*", u.aura_level),
+                        format!("> Puntos Aura › *{}*", format_number(u.aura_points)),
+                    ],
                 ),
-                vec![target],
-            )
-            .await;
+                footer_tag(DEFAULT_BOT_NAME)
+            );
+            ctx.reply_with_mentions(body, vec![target]).await;
             true
         }
         "setmyname" | "minombre" => {
@@ -117,8 +191,16 @@ pub async fn run(ctx: &CommandContext) -> bool {
             ctx.state
                 .db
                 .update_user_field(&ctx.sender, "name", Some(&clipped));
-            ctx.reply_text(format!("Nombre actualizado a: *{}*", clipped))
-                .await;
+            ctx.reply_text(format!(
+                "{}\n\n{}",
+                box_section(
+                    "✅",
+                    "NOMBRE ACTUALIZADO",
+                    &[format!("> Ahora te llamaran › *{}*", clipped)],
+                ),
+                footer_tag(DEFAULT_BOT_NAME)
+            ))
+            .await;
             true
         }
         "setdesc" | "descripcion" | "bio" => {
@@ -132,8 +214,16 @@ pub async fn run(ctx: &CommandContext) -> bool {
             ctx.state
                 .db
                 .update_user_field(&ctx.sender, "description", Some(&clipped));
-            ctx.reply_text(format!("Biografia actualizada:\n{}", clipped))
-                .await;
+            ctx.reply_text(format!(
+                "{}\n\n{}",
+                box_section(
+                    "✅",
+                    "BIO ACTUALIZADA",
+                    &[format!("> {}", clipped)],
+                ),
+                footer_tag(DEFAULT_BOT_NAME)
+            ))
+            .await;
             true
         }
         "setgenre" | "genero" => {
@@ -358,12 +448,16 @@ pub async fn run(ctx: &CommandContext) -> bool {
                     "{}. @{} — *{} XP* (Nv.{})",
                     offset + idx + 1,
                     jid_tag(&u.jid),
-                    u.aura_points,
+                    format_number(u.aura_points),
                     u.aura_level
                 ));
             }
             ctx.reply_with_mentions(
-                format!("*Aura Top (Pagina {})*\n{}", page, lines.join("\n")),
+                format!(
+                    "{}\n\n{}",
+                    box_section("🏆", &format!("AURA TOP PAGINA {}", page), &lines),
+                    footer_tag(DEFAULT_BOT_NAME)
+                ),
                 mentions,
             )
             .await;
@@ -377,39 +471,45 @@ pub async fn run(ctx: &CommandContext) -> bool {
                 .profile_picture_url(&target, ProfilePictureType::Image, None, Some(5_000))
                 .await
             {
-                Ok(Some(url)) => {
-                    match ctx.state.http.get(&url).send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            let mime = resp
-                                .headers()
-                                .get("content-type")
-                                .and_then(|v| v.to_str().ok())
-                                .unwrap_or("image/jpeg")
-                                .to_string();
-                            match resp.bytes().await {
-                                Ok(bytes) => {
-                                    let caption = Some(format!("Foto de perfil de @{}", jid_tag(&target)));
-                                    if let Err(err) = ctx
-                                        .send_image_bytes(bytes.to_vec(), caption, vec![target.clone()], &mime)
-                                        .await
-                                    {
-                                        ctx.reply_text(format!("Error enviando foto: {}", err)).await;
-                                    }
-                                }
-                                Err(err) => {
-                                    ctx.reply_text(format!("Error leyendo imagen: {}", err)).await;
+                Ok(Some(url)) => match ctx.state.http.get(&url).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        let mime = resp
+                            .headers()
+                            .get("content-type")
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("image/jpeg")
+                            .to_string();
+                        match resp.bytes().await {
+                            Ok(bytes) => {
+                                let caption =
+                                    Some(format!("Foto de perfil de @{}", jid_tag(&target)));
+                                if let Err(err) = ctx
+                                    .send_image_bytes(
+                                        bytes.to_vec(),
+                                        caption,
+                                        vec![target.clone()],
+                                        &mime,
+                                    )
+                                    .await
+                                {
+                                    ctx.reply_text(format!("Error enviando foto: {}", err))
+                                        .await;
                                 }
                             }
-                        }
-                        _ => {
-                            ctx.reply_with_mentions(
-                                format!("Foto de @{}:\n{}", jid_tag(&target), url),
-                                vec![target],
-                            )
-                            .await;
+                            Err(err) => {
+                                ctx.reply_text(format!("Error leyendo imagen: {}", err))
+                                    .await;
+                            }
                         }
                     }
-                }
+                    _ => {
+                        ctx.reply_with_mentions(
+                            format!("Foto de @{}:\n{}", jid_tag(&target), url),
+                            vec![target],
+                        )
+                        .await;
+                    }
+                },
                 Ok(None) => {
                     ctx.reply_with_mentions(
                         format!("@{} no tiene foto de perfil publica.", jid_tag(&target)),

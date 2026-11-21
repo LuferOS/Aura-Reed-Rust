@@ -132,6 +132,7 @@ pub struct CommandContext {
     pub message: WaMessage,
     pub from: String,
     pub sender: String,
+    pub push_name: Option<String>,
     pub bot_jid: Option<String>,
     pub is_group: bool,
     pub is_owner: bool,
@@ -149,13 +150,17 @@ impl CommandContext {
     }
 
     pub async fn reply_with_mentions(&self, text: impl Into<String>, mentions: Vec<String>) {
+        let clean_mentions: Vec<String> = mentions
+            .into_iter()
+            .map(|m| crate::ui::normalize_jid(&m))
+            .collect();
         let opts = MessageGenerationOptions {
             user_jid: self.bot_jid.clone(),
             message_id: None,
             timestamp: None,
             quoted: Some(Box::new(self.message.clone())),
             ephemeral_expiration: None,
-            mentions,
+            mentions: clean_mentions,
             view_once: false,
             edit: None,
             context_info: None,
@@ -293,6 +298,47 @@ impl CommandContext {
             .map_err(|e| format!("send: {}", e))
     }
 
+    pub fn mentioned_jids(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        if let Some(ref proto) = self.message.message {
+            let norm = normalize_message_content(proto);
+            if let Some(ref ext) = norm.extended_text_message {
+                let inner: &ExtendedTextMessage = Borrow::borrow(ext);
+                if let Some(ref ci) = inner.context_info {
+                    for m in &ci.mentioned_jid {
+                        if !m.is_empty() {
+                            let clean = crate::ui::normalize_jid(m);
+                            if !out.contains(&clean) {
+                                out.push(clean);
+                            }
+                        }
+                    }
+                    if out.is_empty() {
+                        if let Some(ref part) = ci.participant {
+                            if !part.is_empty() {
+                                out.push(crate::ui::normalize_jid(part));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if out.is_empty() {
+            for arg in &self.args {
+                if let Some(stripped) = arg.strip_prefix('@') {
+                    let digits: String = stripped.chars().filter(|c| c.is_ascii_digit()).collect();
+                    if digits.len() >= 8 {
+                        let jid = format!("{}@s.whatsapp.net", digits);
+                        if !out.contains(&jid) {
+                            out.push(jid);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn target_jid(&self) -> String {
         if let Some(ref proto) = self.message.message {
             let norm = normalize_message_content(proto);
@@ -301,12 +347,12 @@ impl CommandContext {
                 if let Some(ref ci) = inner.context_info {
                     if let Some(first) = ci.mentioned_jid.first() {
                         if !first.is_empty() {
-                            return first.clone();
+                            return crate::ui::normalize_jid(first);
                         }
                     }
                     if let Some(ref part) = ci.participant {
                         if !part.is_empty() {
-                            return part.clone();
+                            return crate::ui::normalize_jid(part);
                         }
                     }
                 }

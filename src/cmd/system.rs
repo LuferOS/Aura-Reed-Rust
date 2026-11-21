@@ -1,5 +1,6 @@
 use crate::config::{DEFAULT_BOT_AUTHOR, DEFAULT_BOT_NAME, DEFAULT_BOT_VERSION};
 use crate::context::CommandContext;
+use crate::ui::{box_section, footer_tag, format_duration, fyt_bold};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -7,6 +8,12 @@ struct ProcessStats {
     rss_mb: f64,
     hwm_mb: f64,
     threads: u32,
+}
+
+struct HostMem {
+    total_gb: f64,
+    avail_gb: f64,
+    used_pct: f64,
 }
 
 fn read_process_stats() -> ProcessStats {
@@ -45,98 +52,197 @@ fn read_process_stats() -> ProcessStats {
     }
 }
 
-fn format_uptime(dur: Duration) -> String {
-    let secs = dur.as_secs();
-    format!(
-        "{:02}h {:02}m {:02}s",
-        secs / 3600,
-        (secs % 3600) / 60,
-        secs % 60
-    )
+fn read_host_mem() -> HostMem {
+    let mut total_kb = 0u64;
+    let mut avail_kb = 0u64;
+    if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+        for line in content.lines() {
+            if let Some(rest) = line.strip_prefix("MemTotal:") {
+                total_kb = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(0);
+            } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
+                avail_kb = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(0);
+            }
+        }
+    }
+    let total_gb = total_kb as f64 / (1024.0 * 1024.0);
+    let avail_gb = avail_kb as f64 / (1024.0 * 1024.0);
+    let used_pct = if total_kb > 0 {
+        ((total_kb.saturating_sub(avail_kb)) as f64 / total_kb as f64) * 100.0
+    } else {
+        0.0
+    };
+    HostMem {
+        total_gb,
+        avail_gb,
+        used_pct,
+    }
+}
+
+fn read_host_uptime() -> Duration {
+    std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse::<f64>().ok()))
+        .map(Duration::from_secs_f64)
+        .unwrap_or_default()
 }
 
 pub async fn run(ctx: &CommandContext) -> bool {
     match ctx.cmd_name.as_str() {
         "ping" | "p" | "pong" | "lat" => {
-            let wa_ping = ctx.messages.socket.ping_ms(Some(2_500)).await.ok();
             let local_ms = ctx.received_at.elapsed().as_secs_f64() * 1000.0;
-            let status = match wa_ping {
-                Some(ms) if ms < 100.0 => "Excelente",
-                Some(ms) if ms < 300.0 => "Buena",
-                Some(ms) if ms < 500.0 => "Moderada",
-                Some(_) => "Alta",
-                None => "Sin respuesta",
+            let wa_ping = ctx.messages.socket.ping_ms(Some(2_500)).await.ok();
+            let (badge, state_txt) = match wa_ping {
+                Some(ms) if ms < 100.0 => ("🟢 Excelente", "Sistema estable"),
+                Some(ms) if ms < 300.0 => ("🟡 Buena", "Operacion normal"),
+                Some(ms) if ms < 500.0 => ("🟠 Moderada", "Estabilizando"),
+                Some(_) => ("🔴 Alta", "Latencia elevada"),
+                None => ("⚪ Sin respuesta", "Timeout WA"),
             };
             let wa_txt = wa_ping
                 .map(|ms| format!("{:.2} ms", ms))
                 .unwrap_or_else(|| "N/A".to_string());
             let body = format!(
-                "*{bot} — Pong*\nPing WA: {wa} ({st})\nLocal: {loc:.3} ms",
-                bot = DEFAULT_BOT_NAME,
-                wa = wa_txt,
-                st = status,
-                loc = local_ms
+                "{}\n\n{}",
+                box_section(
+                    "⚡",
+                    "RESULTADO DE VELOCIDAD",
+                    &[
+                        format!("> {} › {}", fyt_bold("Ping WA"), wa_txt),
+                        format!("> {} › {:.3} ms", fyt_bold("Local Rust"), local_ms),
+                        format!("> {} › {}", fyt_bold("Estado"), badge),
+                        format!("> {} › {}", fyt_bold("Sistema"), state_txt),
+                    ],
+                ),
+                footer_tag(DEFAULT_BOT_NAME)
             );
             ctx.reply_text(body).await;
             true
         }
         "ram" => {
             let stats = read_process_stats();
+            let host = read_host_mem();
             let snap = ctx.state.debug.snapshot().await;
             let body = format!(
-                "*{bot} — Memoria*\nVmRSS: {rss:.2} MB\nVmHWM: {hwm:.2} MB\nWorkers: {wrk} | Hilos: {thr}\nTareas activas: {act}",
-                bot = DEFAULT_BOT_NAME,
-                rss = stats.rss_mb,
-                hwm = stats.hwm_mb,
-                wrk = ctx.state.config.worker_threads,
-                thr = stats.threads,
-                act = snap.active_tasks
+                "{}\n\n{}",
+                box_section(
+                    "🧠",
+                    "MEMORIA",
+                    &[
+                        format!("> {} › {:.2} MB", fyt_bold("Bot usa"), stats.rss_mb),
+                        format!("> {} › {:.2} MB", fyt_bold("Pico HWM"), stats.hwm_mb),
+                        format!(
+                            "> {} › {:.2} GB / {:.2} GB ({:.1}%)",
+                            fyt_bold("Host"),
+                            host.total_gb - host.avail_gb,
+                            host.total_gb,
+                            host.used_pct
+                        ),
+                        format!("> {} › {:.2} GB", fyt_bold("Libre"), host.avail_gb),
+                        format!(
+                            "> {} › {} | Workers: {} | Tareas: {}",
+                            fyt_bold("Hilos"),
+                            stats.threads,
+                            ctx.state.config.worker_threads,
+                            snap.active_tasks
+                        ),
+                    ],
+                ),
+                footer_tag(DEFAULT_BOT_NAME)
             );
             ctx.reply_text(body).await;
             true
         }
-        "info" | "infobot" | "aura" => {
-            let wa_ping = ctx.messages.socket.ping_ms(Some(2_500)).await.ok();
+        "info" | "infobot" | "botinfo" | "system" | "sys" | "aura" => {
             let local_ms = ctx.received_at.elapsed().as_secs_f64() * 1000.0;
+            let wa_ping = ctx.messages.socket.ping_ms(Some(2_500)).await.ok();
             let stats = read_process_stats();
+            let host = read_host_mem();
+            let host_up = read_host_uptime();
             let snap = ctx.state.debug.snapshot().await;
             let subbots = ctx.state.subbots.active_count().await;
             let msgs = ctx.state.processed_msgs.load(Ordering::Relaxed);
             let wa_txt = wa_ping
                 .map(|ms| format!("{:.2} ms", ms))
                 .unwrap_or_else(|| "N/A".to_string());
+
+            let sec_perf = box_section(
+                "⚡",
+                DEFAULT_BOT_NAME,
+                &[
+                    format!(
+                        "> {} › v{} (Rust Native)",
+                        fyt_bold("Version"),
+                        DEFAULT_BOT_VERSION
+                    ),
+                    format!("> {} › {}", fyt_bold("Autor"), DEFAULT_BOT_AUTHOR),
+                    format!("> {} › {} | Local: {:.3} ms", fyt_bold("Ping"), wa_txt, local_ms),
+                    format!(
+                        "> {} › {} | Comandos: {}",
+                        fyt_bold("Mensajes"),
+                        msgs,
+                        snap.total_commands
+                    ),
+                    format!("> {} › {}", fyt_bold("SubBots"), subbots),
+                ],
+            );
+
+            let sec_mem = box_section(
+                "🧠",
+                "MEMORIA",
+                &[
+                    format!("> {} › {:.2} MB (pico {:.2} MB)", fyt_bold("Bot usa"), stats.rss_mb, stats.hwm_mb),
+                    format!("> {} › {:.2} GB", fyt_bold("Total host"), host.total_gb),
+                    format!("> {} › {:.2} GB", fyt_bold("Libre"), host.avail_gb),
+                ],
+            );
+
+            let sec_up = box_section(
+                "⏱️",
+                "UPTIME",
+                &[
+                    format!("> {} › {}", fyt_bold("Bot activo"), format_duration(ctx.state.started_at.elapsed())),
+                    format!("> {} › {}", fyt_bold("Host encendido"), format_duration(host_up)),
+                ],
+            );
+
+            let sec_env = box_section(
+                "⚙️",
+                "ENTORNO",
+                &[
+                    format!("> {} › Rust 2021 ({})", fyt_bold("Runtime"), std::env::consts::ARCH),
+                    format!("> {} › {}", fyt_bold("PID"), std::process::id()),
+                    format!("> {} › {} | Workers: {}", fyt_bold("Hilos"), stats.threads, ctx.state.config.worker_threads),
+                    format!(
+                        "> {} › {}.{}.{}",
+                        fyt_bold("WA Web"),
+                        ctx.state.wa_version[0],
+                        ctx.state.wa_version[1],
+                        ctx.state.wa_version[2]
+                    ),
+                    format!(
+                        "> {} › {} | Errores: {}",
+                        fyt_bold("Debug"),
+                        if snap.enabled { "ON" } else { "OFF" },
+                        snap.total_errors
+                    ),
+                ],
+            );
+
             let body = format!(
-                "*{bot}* v{ver} (Rust)\n\
-                {author}\n\n\
-                *Rendimiento*\n\
-                - Ping WA: {wa}\n\
-                - Local: {loc:.3} ms\n\
-                - Uptime: {up}\n\
-                - Mensajes: {msgs} | Comandos: {cmds}\n\
-                - SubBots activos: {subs}\n\n\
-                *Sistema*\n\
-                - RAM: {rss:.2} MB (pico {hwm:.2} MB)\n\
-                - Hilos: {thr} | Workers: {wrk}\n\
-                - WA Web: {w0}.{w1}.{w2}\n\
-                - Debug: {dbg} | Errores: {errs}",
-                bot = DEFAULT_BOT_NAME,
-                ver = DEFAULT_BOT_VERSION,
-                author = DEFAULT_BOT_AUTHOR,
-                wa = wa_txt,
-                loc = local_ms,
-                up = format_uptime(ctx.state.started_at.elapsed()),
-                msgs = msgs,
-                cmds = snap.total_commands,
-                subs = subbots,
-                rss = stats.rss_mb,
-                hwm = stats.hwm_mb,
-                thr = stats.threads,
-                wrk = ctx.state.config.worker_threads,
-                w0 = ctx.state.wa_version[0],
-                w1 = ctx.state.wa_version[1],
-                w2 = ctx.state.wa_version[2],
-                dbg = if snap.enabled { "ON" } else { "OFF" },
-                errs = snap.total_errors
+                "{}\n\n{}\n\n{}\n\n{}\n\n{}",
+                sec_perf,
+                sec_mem,
+                sec_up,
+                sec_env,
+                footer_tag("REED SYSTEM")
             );
             ctx.reply_text(body).await;
             true
@@ -184,14 +290,18 @@ pub async fn run(ctx: &CommandContext) -> bool {
                             .join("\n")
                     };
                     ctx.reply_text(format!(
-                        "*Debug* ({state})\nLag socket/recv: {sl}/{rl}\nActivas: {act} | Errores: {err}\n\n*Tiempos*\n{perf}\n\n*Errores*\n{errs}",
-                        state = if snap.enabled { "ON" } else { "OFF" },
-                        sl = snap.socket_lagged,
-                        rl = snap.recv_lagged,
-                        act = snap.active_tasks,
-                        err = snap.total_errors,
-                        perf = perf,
-                        errs = errs
+                        "{}\n\n*Tiempos*\n{}\n\n*Errores*\n{}",
+                        box_section(
+                            "🛠️",
+                            "DEBUG",
+                            &[
+                                format!("> Estado › {}", if snap.enabled { "ON" } else { "OFF" }),
+                                format!("> Lag socket/recv › {}/{}", snap.socket_lagged, snap.recv_lagged),
+                                format!("> Activas › {} | Errores › {}", snap.active_tasks, snap.total_errors),
+                            ],
+                        ),
+                        perf,
+                        errs
                     ))
                     .await;
                 }
@@ -211,18 +321,21 @@ pub async fn run(ctx: &CommandContext) -> bool {
                 .map(|(c, n)| format!("`{}` ({})", c, n))
                 .collect::<Vec<_>>()
                 .join(", ");
-            ctx.reply_text(format!(
-                "*{}*\nActivo: *{}* ({})\nUsuario: `{}` | Grupo: `{}`\n\nCambia con `{}idioma <codigo>` o `{}setgrouplang <codigo>`\n\n*Disponibles:*\n{}",
-                title,
-                crate::lang::lang_name(active),
-                active,
-                ctx.user.user_lang,
-                group_lang.as_deref().unwrap_or("auto"),
-                ctx.used_prefix,
-                ctx.used_prefix,
-                codes
-            ))
-            .await;
+            let body = format!(
+                "{}\n\n*Disponibles:*\n{}\n\n{}",
+                box_section(
+                    "🌐",
+                    &title.to_uppercase(),
+                    &[
+                        format!("> Activo › {} (`{}`)", crate::lang::lang_name(active), active),
+                        format!("> Usuario › `{}` | Grupo › `{}`", ctx.user.user_lang, group_lang.as_deref().unwrap_or("auto")),
+                        format!("> Cambiar › `{}idioma <cod>` | `{}setgrouplang <cod>`", ctx.used_prefix, ctx.used_prefix),
+                    ],
+                ),
+                codes,
+                footer_tag(DEFAULT_BOT_NAME)
+            );
+            ctx.reply_text(body).await;
             true
         }
         "snipe" => {
@@ -232,8 +345,12 @@ pub async fn run(ctx: &CommandContext) -> bool {
                     .as_ref()
                     .and_then(crate::handler::extract_message_text)
                     .unwrap_or_else(|| "[contenido multimedia]".to_string());
-                ctx.reply_text(format!("*Ultimo mensaje borrado:*\n{}", preview))
-                    .await;
+                let body = format!(
+                    "{}\n\n{}",
+                    box_section("🕵️", "SNIPE", &[preview]),
+                    footer_tag(DEFAULT_BOT_NAME)
+                );
+                ctx.reply_text(body).await;
             } else {
                 ctx.reply_text("No hay mensajes eliminados recientes en este chat.")
                     .await;

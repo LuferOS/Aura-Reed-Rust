@@ -1146,6 +1146,25 @@ impl AuraDb {
         self.invalidate_group(group_jid);
     }
 
+
+    pub fn sync_username(&self, jid: &str, push_name: &str) {
+        let trimmed = push_name.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        let u = self.ensure_user(jid, Some(trimmed));
+        if u.username.as_deref() == Some(trimmed) {
+            return;
+        }
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute(
+                "UPDATE users SET username = ?1 WHERE jid = ?2",
+                params![trimmed, jid],
+            );
+        }
+        self.invalidate_user(jid);
+    }
+
     pub fn checkpoint(&self) {
         if let Ok(conn) = self.conn.lock() {
             let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
