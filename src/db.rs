@@ -42,6 +42,7 @@ pub struct GachaDrawRecord {
     pub claimed_by: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct GachaHaremEntry {
     pub character_id: String,
@@ -1089,6 +1090,60 @@ impl AuraDb {
         .optional()
         .ok()
         .flatten()
+    }
+
+
+    pub fn is_category_blocked(&self, group_jid: &str, category: &str) -> bool {
+        let _ = self.ensure_group(group_jid);
+        let raw: String = self
+            .conn
+            .lock()
+            .ok()
+            .and_then(|conn| {
+                conn.query_row(
+                    r#"SELECT COALESCE(catBlocked, '["nsfw"]') FROM groups WHERE jid = ?1"#,
+                    params![group_jid],
+                    |r| r.get(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+            })
+            .unwrap_or_else(|| r#"["nsfw"]"#.to_string());
+        let list: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+        list.iter().any(|c| c.eq_ignore_ascii_case(category))
+    }
+
+    pub fn set_category_blocked(&self, group_jid: &str, category: &str, blocked: bool) {
+        let _ = self.ensure_group(group_jid);
+        let raw: String = self
+            .conn
+            .lock()
+            .ok()
+            .and_then(|conn| {
+                conn.query_row(
+                    r#"SELECT COALESCE(catBlocked, '["nsfw"]') FROM groups WHERE jid = ?1"#,
+                    params![group_jid],
+                    |r| r.get(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+            })
+            .unwrap_or_else(|| r#"["nsfw"]"#.to_string());
+        let mut list: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+        list.retain(|c| !c.eq_ignore_ascii_case(category));
+        if blocked {
+            list.push(category.to_ascii_lowercase());
+        }
+        let json = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string());
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute(
+                "UPDATE groups SET catBlocked = ?1 WHERE jid = ?2",
+                params![json, group_jid],
+            );
+        }
+        self.invalidate_group(group_jid);
     }
 
     pub fn checkpoint(&self) {

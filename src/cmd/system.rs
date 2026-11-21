@@ -198,6 +198,33 @@ pub async fn run(ctx: &CommandContext) -> bool {
             }
             true
         }
+        "lang" | "langs" | "idiomas" => {
+            let group_lang = if ctx.is_group {
+                ctx.state.db.ensure_group(&ctx.from).group_lang
+            } else {
+                None
+            };
+            let active = crate::lang::resolve_lang(&ctx.user.user_lang, group_lang.as_deref());
+            let title = crate::lang::tr(&ctx.state.config.data_dir, active, "lang_header");
+            let codes = crate::lang::SUPPORTED_LANGS
+                .iter()
+                .map(|(c, n)| format!("`{}` ({})", c, n))
+                .collect::<Vec<_>>()
+                .join(", ");
+            ctx.reply_text(format!(
+                "*{}*\nActivo: *{}* ({})\nUsuario: `{}` | Grupo: `{}`\n\nCambia con `{}idioma <codigo>` o `{}setgrouplang <codigo>`\n\n*Disponibles:*\n{}",
+                title,
+                crate::lang::lang_name(active),
+                active,
+                ctx.user.user_lang,
+                group_lang.as_deref().unwrap_or("auto"),
+                ctx.used_prefix,
+                ctx.used_prefix,
+                codes
+            ))
+            .await;
+            true
+        }
         "snipe" => {
             if let Some(msg) = ctx.state.snipe.latest_deleted(&ctx.from) {
                 let preview = msg

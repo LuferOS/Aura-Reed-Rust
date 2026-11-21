@@ -4,6 +4,7 @@ mod context;
 mod db;
 mod debug;
 mod handler;
+mod lang;
 mod snipe;
 
 use baileys_rs::signal::LibSignalRepository;
@@ -201,6 +202,7 @@ async fn run_bot(cfg: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
         proposals: std::sync::Mutex::new(std::collections::HashMap::new()),
         spam_tracker: std::sync::Mutex::new(std::collections::HashMap::new()),
         group_meta_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+        hangman_games: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     if cfg.start_subbots {

@@ -10,7 +10,7 @@ pub async fn run(ctx: &CommandContext) -> bool {
                 "*{bot} Rust* v{ver}\n\
                 Prefijos: {prefs}\n\n\
                 *[system]*\n\
-                - `{p}ping` / `{p}info` / `{p}ram` / `{p}snipe` / `{p}debug`\n\n\
+                - `{p}ping` / `{p}info` / `{p}ram` / `{p}snipe` / `{p}lang` / `{p}debug`\n\n\
                 *[socket]*\n\
                 - `{p}menu` / `{p}bots` / `{p}code <numero>` / `{p}stopsub <id>`\n\n\
                 *[sticker]*\n\
@@ -26,7 +26,7 @@ pub async fn run(ctx: &CommandContext) -> bool {
                 - `{p}perfil` / `{p}pfp` / `{p}lvl` / `{p}eboard` / `{p}setmyname` / `{p}setdesc`\n\
                 - `{p}setgenre` / `{p}cumple` / `{p}idioma` / `{p}marry` / `{p}divorce` / `{p}accept` / `{p}reject`\n\n\
                 *[group]*\n\
-                - `{p}antilink` / `{p}antitoxic` / `{p}antispam` / `{p}anticalls` / `{p}onlyadmin` / `{p}bot`\n\
+                - `{p}antilink` / `{p}antitoxic` / `{p}antispam` / `{p}anticalls` / `{p}onlyadmin` / `{p}nsfw` / `{p}bot`\n\
                 - `{p}kick` / `{p}add` / `{p}promote` / `{p}demote` / `{p}open` / `{p}close` / `{p}link` / `{p}revoke` / `{p}leave`\n\
                 - `{p}tagall` / `{p}tag` / `{p}infogroup` / `{p}welcome` / `{p}bye` / `{p}setwelcome` / `{p}setsubject` / `{p}setdescgp`\n\
                 - `{p}setprefix` / `{p}warn` / `{p}delwarn` / `{p}warns` / `{p}setwarnlimit` / `{p}mute` / `{p}unmute` / `{p}del`\n\n\
@@ -37,6 +37,11 @@ pub async fn run(ctx: &CommandContext) -> bool {
                 - `{p}vote` / `{p}waifusboard` / `{p}htop` / `{p}sell` / `{p}wshop` / `{p}buyc` / `{p}givechar` / `{p}delchar` / `{p}setfav` / `{p}robwaifu`\n\n\
                 *[search]*\n\
                 - `{p}yts` / `{p}tts` / `{p}sps` / `{p}pin` / `{p}lrc`\n\n\
+                *[games & stalk]*\n\
+                - `{p}ahorcado` / `{p}ruletarusa` / `{p}aviator` / `{p}slots` / `{p}dado` / `{p}juegos` / `{p}inspect`\n\n\
+                *[interaccion & nsfw]*\n\
+                - `{p}hug` / `{p}kiss` / `{p}slap` / `{p}pat` / `{p}poke` / `{p}bite` / `{p}cry` / `{p}dance` / `{p}kill` / `{p}bonk` (+30)\n\
+                - `{p}r34` / `{p}xnxx` / `{p}xvideos` / `{p}spank` / `{p}yuri` (requiere `{p}nsfw on`)\n\n\
                 *[funy & utils]*\n\
                 - `{p}8bal` / `{p}ship` / `{p}demandar` / `{p}top` / `{p}cuernos` / `{p}lid` / `{p}get` / `{p}setrole` / `{p}banuser`",
                 bot = DEFAULT_BOT_NAME,

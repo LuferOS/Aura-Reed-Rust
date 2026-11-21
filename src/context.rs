@@ -24,6 +24,14 @@ const MAX_GROUP_META_CACHE: usize = 64;
 const GROUP_META_TTL_SECS: u64 = 300;
 
 #[derive(Debug, Clone)]
+pub struct HangmanGame {
+    pub word: String,
+    pub guessed: Vec<char>,
+    pub wrong: u8,
+    pub started_at: Instant,
+}
+
+#[derive(Debug, Clone)]
 pub struct PendingProposal {
     pub kind: String,
     pub from: String,
@@ -46,6 +54,7 @@ pub struct BotState {
     pub proposals: std::sync::Mutex<HashMap<String, PendingProposal>>,
     pub spam_tracker: std::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
     pub group_meta_cache: std::sync::Mutex<HashMap<String, (GroupMetadata, Instant)>>,
+    pub hangman_games: std::sync::Mutex<HashMap<String, HangmanGame>>,
 }
 
 impl BotState {
@@ -704,6 +713,95 @@ impl CommandContext {
                 &self.from,
                 AnyMessageContent::Raw(Message {
                     sticker_message: Some(sticker.into()),
+                    ..Default::default()
+                }),
+                opts,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("send: {}", e))
+    }
+
+    pub async fn send_gif_video_bytes(
+        &self,
+        bytes: Vec<u8>,
+        caption: Option<String>,
+        mentions: Vec<String>,
+    ) -> Result<(), String> {
+        let sha_res = tokio::task::spawn_blocking(move || {
+            let mut h = Sha256::new();
+            h.update(&bytes);
+            (h.finalize().to_vec(), bytes)
+        })
+        .await
+        .map_err(|e| format!("sha: {}", e))?;
+
+        let (sha_vec, raw) = sha_res;
+        let enc = encrypted_stream(&WaMediaUpload::Bytes(raw), MediaType::Video, false)
+            .await
+            .map_err(|e| format!("encrypt: {}", e))?;
+
+        let enc_len = tokio::fs::metadata(&enc.enc_file_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let b64 = BASE64.encode(&enc.file_enc_sha256);
+        let upload_res = upload_media_to_server(
+            &enc.enc_file_path,
+            MediaType::Video,
+            &b64,
+            &self.messages,
+            &[],
+            &HashMap::new(),
+            Some(15_000),
+        )
+        .await;
+
+        let enc_path = enc.enc_file_path.clone();
+        let orig_path = enc.original_file_path.clone();
+        tokio::spawn(async move {
+            let _ = tokio::fs::remove_file(enc_path).await;
+            if let Some(p) = orig_path {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+        });
+
+        let up = upload_res.map_err(|e| format!("upload: {}", e))?;
+        let context_info = if mentions.is_empty() {
+            None
+        } else {
+            Some(
+                ContextInfo {
+                    mentioned_jid: mentions,
+                    ..Default::default()
+                }
+                .into(),
+            )
+        };
+        let vid = VideoMessage {
+            url: Some(up.media_url),
+            direct_path: Some(up.direct_path),
+            media_key: Some(enc.media_key),
+            file_enc_sha256: Some(enc.file_enc_sha256),
+            file_sha256: Some(sha_vec),
+            file_length: Some(enc_len),
+            mimetype: Some("video/mp4".to_string()),
+            caption,
+            context_info,
+            ..Default::default()
+        };
+
+        let opts = MessageGenerationOptions {
+            user_jid: self.bot_jid.clone(),
+            quoted: Some(Box::new(self.message.clone())),
+            ..Default::default()
+        };
+
+        self.messages
+            .send_message(
+                &self.from,
+                AnyMessageContent::Raw(Message {
+                    video_message: Some(vid.into()),
                     ..Default::default()
                 }),
                 opts,

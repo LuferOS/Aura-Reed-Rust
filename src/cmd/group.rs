@@ -106,6 +106,31 @@ pub async fn run(ctx: &CommandContext) -> bool {
             let g = ctx.state.db.ensure_group(&ctx.from);
             handle_toggle(ctx, "onlyAdmin", "Modo Solo Admins", g.only_admin, false).await
         }
+        "nsfw" | "modonsfw" => {
+            if !require_admin(ctx, false).await {
+                return true;
+            }
+            let raw = ctx.args.first().map(String::as_str).unwrap_or("");
+            let cur_enabled = !ctx.state.db.is_category_blocked(&ctx.from, "nsfw");
+            let Some(enabled) = parse_toggle(raw) else {
+                ctx.reply_text(format!(
+                    "*Modo NSFW*\nEstado actual: *{}*\nUso: `{}nsfw on|off`",
+                    if cur_enabled { "Activado" } else { "Desactivado" },
+                    ctx.used_prefix
+                ))
+                .await;
+                return true;
+            };
+            ctx.state
+                .db
+                .set_category_blocked(&ctx.from, "nsfw", !enabled);
+            ctx.reply_text(format!(
+                "Modo NSFW *{}* en este grupo.",
+                if enabled { "activado" } else { "desactivado" }
+            ))
+            .await;
+            true
+        }
         "bot" => {
             let g = ctx.state.db.ensure_group(&ctx.from);
             handle_toggle(ctx, "botOnline", "Bot en Grupo", g.bot_online, false).await

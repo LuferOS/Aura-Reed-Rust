@@ -245,6 +245,18 @@ pub async fn handle_message(
         return;
     };
     let Some((used_prefix, cmd_name, args, text)) = parse_command(&raw_text, &prefixes) else {
+        if !from_me {
+            let _ = cmd::games::try_hangman_direct_guess(
+                &state,
+                &messages,
+                &message,
+                &from,
+                &sender,
+                &bot_jid,
+                &raw_text,
+            )
+            .await;
+        }
         return;
     };
 
@@ -303,10 +315,16 @@ pub async fn handle_message(
         true
     } else if cmd::gacha::run(&ctx).await {
         true
+    } else if cmd::games::run(&ctx).await {
+        true
+    } else if cmd::stalk::run(&ctx).await {
+        true
     } else if cmd::funy::run(&ctx).await {
         true
+    } else if cmd::utils::run(&ctx).await {
+        true
     } else {
-        cmd::utils::run(&ctx).await
+        cmd::interaccion::run(&ctx).await
     };
 
     if handled {
