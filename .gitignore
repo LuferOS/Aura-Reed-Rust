@@ -1,0 +1,8 @@
+/target
+/sessions
+/data
+/cache
+wa_version.json
+*.db
+*.db-shm
+*.db-wal
