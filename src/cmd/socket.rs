@@ -14,7 +14,7 @@ pub async fn run(ctx: &CommandContext) -> bool {
                 *[socket]*\n\
                 - `{p}menu` / `{p}bots` / `{p}code <numero>` / `{p}stopsub <id>`\n\n\
                 *[sticker]*\n\
-                - `{p}s` / `{p}sticker`\n\n\
+                - `{p}s` / `{p}setmeta` / `{p}brat` / `{p}bratv` / `{p}emojimix` / `{p}toimg`\n\n\
                 *[ai]*\n\
                 - `{p}gpt` / `{p}gemini` / `{p}deepseek` / `{p}grok` / `{p}copilot`\n\n\
                 *[economy]*\n\
@@ -30,6 +30,11 @@ pub async fn run(ctx: &CommandContext) -> bool {
                 - `{p}kick` / `{p}add` / `{p}promote` / `{p}demote` / `{p}open` / `{p}close` / `{p}link` / `{p}revoke` / `{p}leave`\n\
                 - `{p}tagall` / `{p}tag` / `{p}infogroup` / `{p}welcome` / `{p}bye` / `{p}setwelcome` / `{p}setsubject` / `{p}setdescgp`\n\
                 - `{p}setprefix` / `{p}warn` / `{p}delwarn` / `{p}warns` / `{p}setwarnlimit` / `{p}mute` / `{p}unmute` / `{p}del`\n\n\
+                *[download]*\n\
+                - `{p}play` / `{p}play2` / `{p}tiktok` / `{p}ttaudio` / `{p}ig` / `{p}fb` / `{p}spotify` / `{p}x` / `{p}apk` / `{p}mf` / `{p}ssweb`\n\n\
+                *[gacha]*\n\
+                - `{p}rw` / `{p}claim` / `{p}harem` / `{p}winfo` / `{p}wimage` / `{p}animelist` / `{p}animeinfo` / `{p}ginfo`\n\
+                - `{p}vote` / `{p}waifusboard` / `{p}htop` / `{p}sell` / `{p}wshop` / `{p}buyc` / `{p}givechar` / `{p}delchar` / `{p}setfav` / `{p}robwaifu`\n\n\
                 *[search]*\n\
                 - `{p}yts` / `{p}tts` / `{p}sps` / `{p}pin` / `{p}lrc`\n\n\
                 *[funy & utils]*\n\

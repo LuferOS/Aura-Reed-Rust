@@ -3,7 +3,7 @@ use crate::db::{AuraDb, UserRecord};
 use crate::debug::DebugState;
 use crate::snipe::SnipeStore;
 use baileys_rs::defaults::MediaType;
-use baileys_rs::proto::message::{ExtendedTextMessage, ImageMessage};
+use baileys_rs::proto::message::{AudioMessage, DocumentMessage, ExtendedTextMessage, ImageMessage, StickerMessage, VideoMessage};
 use baileys_rs::proto::{ContextInfo, Message};
 use baileys_rs::socket::{MessagesSocket, SubBotManager};
 use baileys_rs::types::{GroupMetadata, GroupParticipant, WaMessage};
@@ -312,6 +312,413 @@ impl CommandContext {
             }
         }
         self.sender.clone()
+    }
+
+    pub async fn send_image_bytes_returning_id(
+        &self,
+        bytes: Vec<u8>,
+        caption: Option<String>,
+        mentions: Vec<String>,
+        mimetype: &str,
+    ) -> Result<Option<String>, String> {
+        let sha_res = tokio::task::spawn_blocking(move || {
+            let mut h = Sha256::new();
+            h.update(&bytes);
+            (h.finalize().to_vec(), bytes)
+        })
+        .await
+        .map_err(|e| format!("sha: {}", e))?;
+
+        let (sha_vec, raw) = sha_res;
+        let enc = encrypted_stream(&WaMediaUpload::Bytes(raw), MediaType::Image, false)
+            .await
+            .map_err(|e| format!("encrypt: {}", e))?;
+
+        let enc_len = tokio::fs::metadata(&enc.enc_file_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let b64 = BASE64.encode(&enc.file_enc_sha256);
+        let upload_res = upload_media_to_server(
+            &enc.enc_file_path,
+            MediaType::Image,
+            &b64,
+            &self.messages,
+            &[],
+            &HashMap::new(),
+            Some(12_000),
+        )
+        .await;
+
+        let enc_path = enc.enc_file_path.clone();
+        let orig_path = enc.original_file_path.clone();
+        tokio::spawn(async move {
+            let _ = tokio::fs::remove_file(enc_path).await;
+            if let Some(p) = orig_path {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+        });
+
+        let up = upload_res.map_err(|e| format!("upload: {}", e))?;
+        let context_info = if mentions.is_empty() {
+            None
+        } else {
+            Some(
+                ContextInfo {
+                    mentioned_jid: mentions,
+                    ..Default::default()
+                }
+                .into(),
+            )
+        };
+
+        let img = ImageMessage {
+            url: Some(up.media_url),
+            direct_path: Some(up.direct_path),
+            media_key: Some(enc.media_key),
+            file_enc_sha256: Some(enc.file_enc_sha256),
+            file_sha256: Some(sha_vec),
+            file_length: Some(enc_len),
+            mimetype: Some(mimetype.to_string()),
+            caption,
+            context_info,
+            ..Default::default()
+        };
+
+        let opts = MessageGenerationOptions {
+            user_jid: self.bot_jid.clone(),
+            quoted: Some(Box::new(self.message.clone())),
+            ..Default::default()
+        };
+
+        let sent = self
+            .messages
+            .send_message(
+                &self.from,
+                AnyMessageContent::Raw(Message {
+                    image_message: Some(img.into()),
+                    ..Default::default()
+                }),
+                opts,
+            )
+            .await
+            .map_err(|e| format!("send: {}", e))?;
+        Ok(sent.key.id)
+    }
+
+    pub async fn send_video_bytes(
+        &self,
+        bytes: Vec<u8>,
+        caption: Option<String>,
+        mimetype: &str,
+    ) -> Result<(), String> {
+        let sha_res = tokio::task::spawn_blocking(move || {
+            let mut h = Sha256::new();
+            h.update(&bytes);
+            (h.finalize().to_vec(), bytes)
+        })
+        .await
+        .map_err(|e| format!("sha: {}", e))?;
+
+        let (sha_vec, raw) = sha_res;
+        let enc = encrypted_stream(&WaMediaUpload::Bytes(raw), MediaType::Video, false)
+            .await
+            .map_err(|e| format!("encrypt: {}", e))?;
+
+        let enc_len = tokio::fs::metadata(&enc.enc_file_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let b64 = BASE64.encode(&enc.file_enc_sha256);
+        let upload_res = upload_media_to_server(
+            &enc.enc_file_path,
+            MediaType::Video,
+            &b64,
+            &self.messages,
+            &[],
+            &HashMap::new(),
+            Some(25_000),
+        )
+        .await;
+
+        let enc_path = enc.enc_file_path.clone();
+        let orig_path = enc.original_file_path.clone();
+        tokio::spawn(async move {
+            let _ = tokio::fs::remove_file(enc_path).await;
+            if let Some(p) = orig_path {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+        });
+
+        let up = upload_res.map_err(|e| format!("upload: {}", e))?;
+        let vid = VideoMessage {
+            url: Some(up.media_url),
+            direct_path: Some(up.direct_path),
+            media_key: Some(enc.media_key),
+            file_enc_sha256: Some(enc.file_enc_sha256),
+            file_sha256: Some(sha_vec),
+            file_length: Some(enc_len),
+            mimetype: Some(mimetype.to_string()),
+            caption,
+            ..Default::default()
+        };
+
+        let opts = MessageGenerationOptions {
+            user_jid: self.bot_jid.clone(),
+            quoted: Some(Box::new(self.message.clone())),
+            ..Default::default()
+        };
+
+        self.messages
+            .send_message(
+                &self.from,
+                AnyMessageContent::Raw(Message {
+                    video_message: Some(vid.into()),
+                    ..Default::default()
+                }),
+                opts,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("send: {}", e))
+    }
+
+    pub async fn send_audio_bytes(
+        &self,
+        bytes: Vec<u8>,
+        mimetype: &str,
+        ptt: bool,
+    ) -> Result<(), String> {
+        let sha_res = tokio::task::spawn_blocking(move || {
+            let mut h = Sha256::new();
+            h.update(&bytes);
+            (h.finalize().to_vec(), bytes)
+        })
+        .await
+        .map_err(|e| format!("sha: {}", e))?;
+
+        let (sha_vec, raw) = sha_res;
+        let enc = encrypted_stream(&WaMediaUpload::Bytes(raw), MediaType::Audio, false)
+            .await
+            .map_err(|e| format!("encrypt: {}", e))?;
+
+        let enc_len = tokio::fs::metadata(&enc.enc_file_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let b64 = BASE64.encode(&enc.file_enc_sha256);
+        let upload_res = upload_media_to_server(
+            &enc.enc_file_path,
+            MediaType::Audio,
+            &b64,
+            &self.messages,
+            &[],
+            &HashMap::new(),
+            Some(20_000),
+        )
+        .await;
+
+        let enc_path = enc.enc_file_path.clone();
+        let orig_path = enc.original_file_path.clone();
+        tokio::spawn(async move {
+            let _ = tokio::fs::remove_file(enc_path).await;
+            if let Some(p) = orig_path {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+        });
+
+        let up = upload_res.map_err(|e| format!("upload: {}", e))?;
+        let audio = AudioMessage {
+            url: Some(up.media_url),
+            direct_path: Some(up.direct_path),
+            media_key: Some(enc.media_key),
+            file_enc_sha256: Some(enc.file_enc_sha256),
+            file_sha256: Some(sha_vec),
+            file_length: Some(enc_len),
+            mimetype: Some(mimetype.to_string()),
+            ptt: Some(ptt),
+            ..Default::default()
+        };
+
+        let opts = MessageGenerationOptions {
+            user_jid: self.bot_jid.clone(),
+            quoted: Some(Box::new(self.message.clone())),
+            ..Default::default()
+        };
+
+        self.messages
+            .send_message(
+                &self.from,
+                AnyMessageContent::Raw(Message {
+                    audio_message: Some(audio.into()),
+                    ..Default::default()
+                }),
+                opts,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("send: {}", e))
+    }
+
+    pub async fn send_document_bytes(
+        &self,
+        bytes: Vec<u8>,
+        file_name: &str,
+        mimetype: &str,
+        caption: Option<String>,
+    ) -> Result<(), String> {
+        let sha_res = tokio::task::spawn_blocking(move || {
+            let mut h = Sha256::new();
+            h.update(&bytes);
+            (h.finalize().to_vec(), bytes)
+        })
+        .await
+        .map_err(|e| format!("sha: {}", e))?;
+
+        let (sha_vec, raw) = sha_res;
+        let enc = encrypted_stream(&WaMediaUpload::Bytes(raw), MediaType::Document, false)
+            .await
+            .map_err(|e| format!("encrypt: {}", e))?;
+
+        let enc_len = tokio::fs::metadata(&enc.enc_file_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let b64 = BASE64.encode(&enc.file_enc_sha256);
+        let upload_res = upload_media_to_server(
+            &enc.enc_file_path,
+            MediaType::Document,
+            &b64,
+            &self.messages,
+            &[],
+            &HashMap::new(),
+            Some(25_000),
+        )
+        .await;
+
+        let enc_path = enc.enc_file_path.clone();
+        let orig_path = enc.original_file_path.clone();
+        tokio::spawn(async move {
+            let _ = tokio::fs::remove_file(enc_path).await;
+            if let Some(p) = orig_path {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+        });
+
+        let up = upload_res.map_err(|e| format!("upload: {}", e))?;
+        let doc = DocumentMessage {
+            url: Some(up.media_url),
+            direct_path: Some(up.direct_path),
+            media_key: Some(enc.media_key),
+            file_enc_sha256: Some(enc.file_enc_sha256),
+            file_sha256: Some(sha_vec),
+            file_length: Some(enc_len),
+            mimetype: Some(mimetype.to_string()),
+            file_name: Some(file_name.to_string()),
+            caption,
+            ..Default::default()
+        };
+
+        let opts = MessageGenerationOptions {
+            user_jid: self.bot_jid.clone(),
+            quoted: Some(Box::new(self.message.clone())),
+            ..Default::default()
+        };
+
+        self.messages
+            .send_message(
+                &self.from,
+                AnyMessageContent::Raw(Message {
+                    document_message: Some(doc.into()),
+                    ..Default::default()
+                }),
+                opts,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("send: {}", e))
+    }
+
+    pub async fn send_sticker_bytes(&self, bytes: Vec<u8>, animated: bool) -> Result<(), String> {
+        let sha_res = tokio::task::spawn_blocking(move || {
+            let mut h = Sha256::new();
+            h.update(&bytes);
+            (h.finalize().to_vec(), bytes)
+        })
+        .await
+        .map_err(|e| format!("sha: {}", e))?;
+
+        let (sha_vec, raw) = sha_res;
+        let enc = encrypted_stream(&WaMediaUpload::Bytes(raw), MediaType::Sticker, false)
+            .await
+            .map_err(|e| format!("encrypt: {}", e))?;
+
+        let enc_len = tokio::fs::metadata(&enc.enc_file_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let b64 = BASE64.encode(&enc.file_enc_sha256);
+        let upload_res = upload_media_to_server(
+            &enc.enc_file_path,
+            MediaType::Sticker,
+            &b64,
+            &self.messages,
+            &[],
+            &HashMap::new(),
+            Some(12_000),
+        )
+        .await;
+
+        let enc_path = enc.enc_file_path.clone();
+        let orig_path = enc.original_file_path.clone();
+        tokio::spawn(async move {
+            let _ = tokio::fs::remove_file(enc_path).await;
+            if let Some(p) = orig_path {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+        });
+
+        let up = upload_res.map_err(|e| format!("upload: {}", e))?;
+        let sticker = StickerMessage {
+            url: Some(up.media_url),
+            direct_path: Some(up.direct_path),
+            media_key: Some(enc.media_key),
+            file_enc_sha256: Some(enc.file_enc_sha256),
+            file_sha256: Some(sha_vec),
+            file_length: Some(enc_len),
+            mimetype: Some("image/webp".to_string()),
+            width: Some(512),
+            height: Some(512),
+            is_animated: Some(animated),
+            ..Default::default()
+        };
+
+        let opts = MessageGenerationOptions {
+            user_jid: self.bot_jid.clone(),
+            quoted: Some(Box::new(self.message.clone())),
+            ..Default::default()
+        };
+
+        self.messages
+            .send_message(
+                &self.from,
+                AnyMessageContent::Raw(Message {
+                    sticker_message: Some(sticker.into()),
+                    ..Default::default()
+                }),
+                opts,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("send: {}", e))
+    }
+
+    pub fn quoted_stanza_id(&self) -> Option<String> {
+        let proto = self.message.message.as_ref()?;
+        let norm = normalize_message_content(proto);
+        let ext = norm.extended_text_message.as_ref()?;
+        let inner: &ExtendedTextMessage = Borrow::borrow(ext);
+        inner.context_info.as_ref()?.stanza_id.clone()
     }
 
     pub fn quoted_text(&self) -> Option<String> {

@@ -1,6 +1,8 @@
 pub mod ai;
+pub mod download;
 pub mod economy;
 pub mod funy;
+pub mod gacha;
 pub mod group;
 pub mod profile;
 pub mod search;

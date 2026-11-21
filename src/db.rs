@@ -31,6 +31,34 @@ pub struct UserRecord {
     pub data_json: String,
 }
 
+
+#[derive(Debug, Clone)]
+pub struct GachaDrawRecord {
+    pub message_id: String,
+    pub drawer_jid: String,
+    pub character_id: String,
+    pub image_id: i64,
+    pub expires_at: u64,
+    pub claimed_by: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GachaHaremEntry {
+    pub character_id: String,
+    pub image_id: i64,
+    pub owner_jid: String,
+    pub claimed_at: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct GachaMarketEntry {
+    pub id: i64,
+    pub seller_jid: String,
+    pub character_id: String,
+    pub image_id: i64,
+    pub price: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupWarnEntry {
     pub reason: String,
@@ -201,6 +229,53 @@ impl AuraDb {
                 currentAudio TEXT DEFAULT NULL,
                 bot_type TEXT DEFAULT 'Principal',
                 data TEXT DEFAULT '{}'
+             );
+
+             CREATE TABLE IF NOT EXISTS gacha_draws (
+                group_jid TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                drawer_jid TEXT NOT NULL,
+                character_id TEXT NOT NULL,
+                image_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                claimed_by TEXT DEFAULT NULL,
+                PRIMARY KEY (group_jid, message_id)
+             );
+
+             CREATE TABLE IF NOT EXISTS gacha_harem (
+                group_jid TEXT NOT NULL,
+                character_id TEXT NOT NULL,
+                image_id INTEGER NOT NULL,
+                owner_jid TEXT NOT NULL,
+                claimed_at INTEGER NOT NULL,
+                PRIMARY KEY (group_jid, character_id, image_id)
+             );
+
+             CREATE TABLE IF NOT EXISTS gacha_votes (
+                group_jid TEXT NOT NULL,
+                character_id TEXT NOT NULL,
+                voter_jid TEXT NOT NULL,
+                voted_at INTEGER NOT NULL,
+                PRIMARY KEY (group_jid, character_id, voter_jid)
+             );
+
+             CREATE TABLE IF NOT EXISTS gacha_market (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_jid TEXT NOT NULL,
+                seller_jid TEXT NOT NULL,
+                character_id TEXT NOT NULL,
+                image_id INTEGER NOT NULL,
+                price INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+             );
+
+             CREATE TABLE IF NOT EXISTS gacha_favorites (
+                group_jid TEXT NOT NULL,
+                user_jid TEXT NOT NULL,
+                character_id TEXT NOT NULL,
+                image_id INTEGER NOT NULL,
+                PRIMARY KEY (group_jid, user_jid)
              );",
         )?;
 
@@ -603,6 +678,417 @@ impl AuraDb {
             );
         }
         self.invalidate_group(group_jid);
+    }
+
+
+    pub fn set_sticker_meta(&self, jid: &str, pack: &str, author: &str) {
+        let _ = self.ensure_user(jid, None);
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute(
+                "UPDATE users SET stickerPackName = ?1, stickerPackAuthor = ?2 WHERE jid = ?3",
+                params![pack, author, jid],
+            );
+        }
+        self.invalidate_user(jid);
+    }
+
+    pub fn save_gacha_draw(
+        &self,
+        group_jid: &str,
+        message_id: &str,
+        drawer_jid: &str,
+        character_id: &str,
+        image_id: i64,
+        now: u64,
+        ttl_secs: u64,
+    ) {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute(
+                "DELETE FROM gacha_draws WHERE group_jid = ?1 AND expires_at < ?2",
+                params![group_jid, now as i64],
+            );
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO gacha_draws (group_jid, message_id, drawer_jid, character_id, image_id, created_at, expires_at, claimed_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+                params![
+                    group_jid,
+                    message_id,
+                    drawer_jid,
+                    character_id,
+                    image_id,
+                    now as i64,
+                    (now + ttl_secs) as i64
+                ],
+            );
+        }
+    }
+
+    pub fn find_gacha_draw_by_msg(&self, group_jid: &str, message_id: &str) -> Option<GachaDrawRecord> {
+        let conn = self.conn.lock().ok()?;
+        conn.query_row(
+            "SELECT message_id, drawer_jid, character_id, image_id, expires_at, claimed_by FROM gacha_draws WHERE group_jid = ?1 AND message_id = ?2",
+            params![group_jid, message_id],
+            |row| {
+                Ok(GachaDrawRecord {
+                    message_id: row.get(0)?,
+                    drawer_jid: row.get(1)?,
+                    character_id: row.get(2)?,
+                    image_id: row.get(3)?,
+                    expires_at: row.get::<_, i64>(4)? as u64,
+                    claimed_by: row.get(5)?,
+                })
+            },
+        )
+        .optional()
+        .ok()
+        .flatten()
+    }
+
+    pub fn find_pending_gacha_draw_by_char(
+        &self,
+        group_jid: &str,
+        character_id: &str,
+        image_id: Option<i64>,
+        now: u64,
+    ) -> Option<GachaDrawRecord> {
+        let conn = self.conn.lock().ok()?;
+        if let Some(img) = image_id {
+            conn.query_row(
+                "SELECT message_id, drawer_jid, character_id, image_id, expires_at, claimed_by FROM gacha_draws WHERE group_jid = ?1 AND character_id = ?2 AND image_id = ?3 AND claimed_by IS NULL AND expires_at >= ?4 ORDER BY created_at DESC LIMIT 1",
+                params![group_jid, character_id, img, now as i64],
+                |row| {
+                    Ok(GachaDrawRecord {
+                        message_id: row.get(0)?,
+                        drawer_jid: row.get(1)?,
+                        character_id: row.get(2)?,
+                        image_id: row.get(3)?,
+                        expires_at: row.get::<_, i64>(4)? as u64,
+                        claimed_by: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .ok()
+            .flatten()
+        } else {
+            conn.query_row(
+                "SELECT message_id, drawer_jid, character_id, image_id, expires_at, claimed_by FROM gacha_draws WHERE group_jid = ?1 AND character_id = ?2 AND claimed_by IS NULL AND expires_at >= ?3 ORDER BY created_at DESC LIMIT 1",
+                params![group_jid, character_id, now as i64],
+                |row| {
+                    Ok(GachaDrawRecord {
+                        message_id: row.get(0)?,
+                        drawer_jid: row.get(1)?,
+                        character_id: row.get(2)?,
+                        image_id: row.get(3)?,
+                        expires_at: row.get::<_, i64>(4)? as u64,
+                        claimed_by: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .ok()
+            .flatten()
+        }
+    }
+
+    pub fn claim_gacha_card(
+        &self,
+        group_jid: &str,
+        message_id: &str,
+        character_id: &str,
+        image_id: i64,
+        owner_jid: &str,
+        now: u64,
+    ) -> bool {
+        let Ok(conn) = self.conn.lock() else {
+            return false;
+        };
+        let inserted = conn
+            .execute(
+                "INSERT OR IGNORE INTO gacha_harem (group_jid, character_id, image_id, owner_jid, claimed_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![group_jid, character_id, image_id, owner_jid, now as i64],
+            )
+            .unwrap_or(0);
+        if inserted > 0 {
+            let _ = conn.execute(
+                "UPDATE gacha_draws SET claimed_by = ?1 WHERE group_jid = ?2 AND message_id = ?3",
+                params![owner_jid, group_jid, message_id],
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_group_claimed_pairs(&self, group_jid: &str) -> Vec<(String, i64)> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT character_id, image_id FROM gacha_harem WHERE group_jid = ?1",
+        ) else {
+            return Vec::new();
+        };
+        let Ok(rows) = stmt.query_map(params![group_jid], |r| Ok((r.get(0)?, r.get(1)?))) else {
+            return Vec::new();
+        };
+        rows.filter_map(Result::ok).collect()
+    }
+
+    pub fn get_user_harem(&self, group_jid: &str, owner_jid: &str) -> Vec<GachaHaremEntry> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT character_id, image_id, owner_jid, claimed_at FROM gacha_harem WHERE group_jid = ?1 AND owner_jid = ?2 ORDER BY claimed_at DESC",
+        ) else {
+            return Vec::new();
+        };
+        let Ok(rows) = stmt.query_map(params![group_jid, owner_jid], |r| {
+            Ok(GachaHaremEntry {
+                character_id: r.get(0)?,
+                image_id: r.get(1)?,
+                owner_jid: r.get(2)?,
+                claimed_at: r.get::<_, i64>(3)? as u64,
+            })
+        }) else {
+            return Vec::new();
+        };
+        rows.filter_map(Result::ok).collect()
+    }
+
+    pub fn get_group_harem_all(&self, group_jid: &str) -> Vec<GachaHaremEntry> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT character_id, image_id, owner_jid, claimed_at FROM gacha_harem WHERE group_jid = ?1",
+        ) else {
+            return Vec::new();
+        };
+        let Ok(rows) = stmt.query_map(params![group_jid], |r| {
+            Ok(GachaHaremEntry {
+                character_id: r.get(0)?,
+                image_id: r.get(1)?,
+                owner_jid: r.get(2)?,
+                claimed_at: r.get::<_, i64>(3)? as u64,
+            })
+        }) else {
+            return Vec::new();
+        };
+        rows.filter_map(Result::ok).collect()
+    }
+
+    pub fn add_gacha_vote(&self, group_jid: &str, character_id: &str, voter_jid: &str, now: u64) -> Result<i64, u64> {
+        let Ok(conn) = self.conn.lock() else {
+            return Ok(0);
+        };
+        let prev: Option<i64> = conn
+            .query_row(
+                "SELECT voted_at FROM gacha_votes WHERE group_jid = ?1 AND character_id = ?2 AND voter_jid = ?3",
+                params![group_jid, character_id, voter_jid],
+                |r| r.get(0),
+            )
+            .optional()
+            .ok()
+            .flatten();
+        if let Some(ts) = prev {
+            let elapsed = now.saturating_sub(ts as u64);
+            if elapsed < 43_200 {
+                return Err(43_200 - elapsed);
+            }
+        }
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO gacha_votes (group_jid, character_id, voter_jid, voted_at) VALUES (?1, ?2, ?3, ?4)",
+            params![group_jid, character_id, voter_jid, now as i64],
+        );
+        let cnt: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM gacha_votes WHERE group_jid = ?1 AND character_id = ?2",
+                params![group_jid, character_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(1);
+        Ok(cnt)
+    }
+
+    pub fn get_group_vote_counts(&self, group_jid: &str) -> HashMap<String, i64> {
+        let mut map = HashMap::new();
+        let Ok(conn) = self.conn.lock() else {
+            return map;
+        };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT character_id, COUNT(*) FROM gacha_votes WHERE group_jid = ?1 GROUP BY character_id",
+        ) else {
+            return map;
+        };
+        if let Ok(rows) = stmt.query_map(params![group_jid], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))) {
+            for (k, v) in rows.filter_map(Result::ok) {
+                map.insert(k, v);
+            }
+        }
+        map
+    }
+
+    pub fn add_gacha_market(
+        &self,
+        group_jid: &str,
+        seller_jid: &str,
+        character_id: &str,
+        image_id: i64,
+        price: i64,
+        now: u64,
+    ) -> Option<i64> {
+        let conn = self.conn.lock().ok()?;
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM gacha_market WHERE group_jid = ?1 AND character_id = ?2 AND image_id = ?3",
+                params![group_jid, character_id, image_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if exists > 0 {
+            return None;
+        }
+        conn.execute(
+            "INSERT INTO gacha_market (group_jid, seller_jid, character_id, image_id, price, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![group_jid, seller_jid, character_id, image_id, price, now as i64],
+        )
+        .ok()?;
+        Some(conn.last_insert_rowid())
+    }
+
+    pub fn list_gacha_market(&self, group_jid: &str) -> Vec<GachaMarketEntry> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT id, seller_jid, character_id, image_id, price FROM gacha_market WHERE group_jid = ?1 ORDER BY id ASC LIMIT 30",
+        ) else {
+            return Vec::new();
+        };
+        let Ok(rows) = stmt.query_map(params![group_jid], |r| {
+            Ok(GachaMarketEntry {
+                id: r.get(0)?,
+                seller_jid: r.get(1)?,
+                character_id: r.get(2)?,
+                image_id: r.get(3)?,
+                price: r.get(4)?,
+            })
+        }) else {
+            return Vec::new();
+        };
+        rows.filter_map(Result::ok).collect()
+    }
+
+    pub fn get_gacha_market_item(&self, group_jid: &str, sale_id: i64) -> Option<GachaMarketEntry> {
+        let conn = self.conn.lock().ok()?;
+        conn.query_row(
+            "SELECT id, seller_jid, character_id, image_id, price FROM gacha_market WHERE group_jid = ?1 AND id = ?2",
+            params![group_jid, sale_id],
+            |r| {
+                Ok(GachaMarketEntry {
+                    id: r.get(0)?,
+                    seller_jid: r.get(1)?,
+                    character_id: r.get(2)?,
+                    image_id: r.get(3)?,
+                    price: r.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .ok()
+        .flatten()
+    }
+
+    pub fn remove_gacha_market(&self, group_jid: &str, sale_id: i64, seller_jid: Option<&str>) -> bool {
+        let Ok(conn) = self.conn.lock() else {
+            return false;
+        };
+        let affected = if let Some(seller) = seller_jid {
+            conn.execute(
+                "DELETE FROM gacha_market WHERE group_jid = ?1 AND id = ?2 AND seller_jid = ?3",
+                params![group_jid, sale_id, seller],
+            )
+            .unwrap_or(0)
+        } else {
+            conn.execute(
+                "DELETE FROM gacha_market WHERE group_jid = ?1 AND id = ?2",
+                params![group_jid, sale_id],
+            )
+            .unwrap_or(0)
+        };
+        affected > 0
+    }
+
+    pub fn transfer_gacha_card(
+        &self,
+        group_jid: &str,
+        character_id: &str,
+        image_id: i64,
+        from_jid: &str,
+        to_jid: &str,
+        now: u64,
+    ) -> bool {
+        let Ok(conn) = self.conn.lock() else {
+            return false;
+        };
+        let affected = conn
+            .execute(
+                "UPDATE gacha_harem SET owner_jid = ?1, claimed_at = ?2 WHERE group_jid = ?3 AND character_id = ?4 AND image_id = ?5 AND owner_jid = ?6",
+                params![to_jid, now as i64, group_jid, character_id, image_id, from_jid],
+            )
+            .unwrap_or(0);
+        if affected > 0 {
+            let _ = conn.execute(
+                "DELETE FROM gacha_market WHERE group_jid = ?1 AND character_id = ?2 AND image_id = ?3",
+                params![group_jid, character_id, image_id],
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn delete_gacha_card(&self, group_jid: &str, character_id: &str, image_id: i64, owner_jid: &str) -> bool {
+        let Ok(conn) = self.conn.lock() else {
+            return false;
+        };
+        let affected = conn
+            .execute(
+                "DELETE FROM gacha_harem WHERE group_jid = ?1 AND character_id = ?2 AND image_id = ?3 AND owner_jid = ?4",
+                params![group_jid, character_id, image_id, owner_jid],
+            )
+            .unwrap_or(0);
+        if affected > 0 {
+            let _ = conn.execute(
+                "DELETE FROM gacha_market WHERE group_jid = ?1 AND character_id = ?2 AND image_id = ?3",
+                params![group_jid, character_id, image_id],
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_gacha_favorite(&self, group_jid: &str, user_jid: &str, character_id: &str, image_id: i64) {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO gacha_favorites (group_jid, user_jid, character_id, image_id) VALUES (?1, ?2, ?3, ?4)",
+                params![group_jid, user_jid, character_id, image_id],
+            );
+        }
+    }
+
+    pub fn get_gacha_favorite(&self, group_jid: &str, user_jid: &str) -> Option<(String, i64)> {
+        let conn = self.conn.lock().ok()?;
+        conn.query_row(
+            "SELECT character_id, image_id FROM gacha_favorites WHERE group_jid = ?1 AND user_jid = ?2",
+            params![group_jid, user_jid],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten()
     }
 
     pub fn checkpoint(&self) {

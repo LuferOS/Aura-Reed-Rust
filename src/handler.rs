@@ -299,6 +299,10 @@ pub async fn handle_message(
         true
     } else if cmd::search::run(&ctx).await {
         true
+    } else if cmd::download::run(&ctx).await {
+        true
+    } else if cmd::gacha::run(&ctx).await {
+        true
     } else if cmd::funy::run(&ctx).await {
         true
     } else {
