@@ -155,7 +155,7 @@ fn spawn_subbot_event_loop(state: Arc<BotState>) {
                     if let Some(sock) = state.subbots.get_messages_socket(&session_id).await {
                         let st = Arc::clone(&state);
                         tokio::spawn(async move {
-                            handler::handle_message(st, sock, message, is_offline).await;
+                            Box::pin(handler::handle_message(st, sock, message, is_offline)).await;
                         });
                     }
                 }
@@ -333,7 +333,7 @@ async fn run_bot(cfg: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
                             st_c.debug.active_tasks.fetch_add(1, Ordering::Relaxed);
                                                         let _ = tokio::time::timeout(
                                 Duration::from_secs(25),
-                                handler::handle_message(st_c.clone(), sock_c, message, is_offline),
+                                Box::pin(handler::handle_message(st_c.clone(), sock_c, message, is_offline)),
                             )
                             .await;
                             st_c.debug.active_tasks.fetch_sub(1, Ordering::Relaxed);
@@ -448,7 +448,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cfg.worker_threads)
         .max_blocking_threads(4)
-        .thread_stack_size(256 * 1024)
+        .thread_stack_size(1024 * 1024)
         .enable_all()
         .build()?;
 

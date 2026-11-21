@@ -326,36 +326,36 @@ pub async fn handle_message(
     };
 
     let cat_open = |cat: &str| !is_group || !state.db.is_category_blocked(&ctx.from, cat);
-    let handled = if cmd::system::run(&ctx).await {
+    let handled = if Box::pin(cmd::system::run(&ctx)).await {
         true
-    } else if cmd::socket::run(&ctx).await {
+    } else if Box::pin(cmd::socket::run(&ctx)).await {
         true
-    } else if cmd::group::run(&ctx).await {
+    } else if Box::pin(cmd::group::run(&ctx)).await {
         true
-    } else if cat_open("sticker") && cmd::sticker::run(&ctx).await {
+    } else if cat_open("sticker") && Box::pin(cmd::sticker::run(&ctx)).await {
         true
-    } else if cat_open("ai") && cmd::ai::run(&ctx).await {
+    } else if cat_open("ai") && Box::pin(cmd::ai::run(&ctx)).await {
         true
-    } else if cat_open("economy") && cmd::economy::run(&ctx).await {
+    } else if cat_open("economy") && Box::pin(cmd::economy::run(&ctx)).await {
         true
-    } else if cat_open("profile") && cmd::profile::run(&ctx).await {
+    } else if cat_open("profile") && Box::pin(cmd::profile::run(&ctx)).await {
         true
-    } else if cat_open("search") && cmd::search::run(&ctx).await {
+    } else if cat_open("search") && Box::pin(cmd::search::run(&ctx)).await {
         true
-    } else if cat_open("download") && cmd::download::run(&ctx).await {
+    } else if cat_open("download") && Box::pin(cmd::download::run(&ctx)).await {
         true
-    } else if cat_open("gacha") && cmd::gacha::run(&ctx).await {
+    } else if cat_open("gacha") && Box::pin(cmd::gacha::run(&ctx)).await {
         true
-    } else if cat_open("games") && cmd::games::run(&ctx).await {
+    } else if cat_open("games") && Box::pin(cmd::games::run(&ctx)).await {
         true
-    } else if cat_open("stalk") && cmd::stalk::run(&ctx).await {
+    } else if cat_open("stalk") && Box::pin(cmd::stalk::run(&ctx)).await {
         true
-    } else if cat_open("funy") && cmd::funy::run(&ctx).await {
+    } else if cat_open("funy") && Box::pin(cmd::funy::run(&ctx)).await {
         true
-    } else if cat_open("utils") && cmd::utils::run(&ctx).await {
+    } else if cat_open("utils") && Box::pin(cmd::utils::run(&ctx)).await {
         true
     } else if cat_open("interaccion") {
-        cmd::interaccion::run(&ctx).await
+        Box::pin(cmd::interaccion::run(&ctx)).await
     } else {
         false
     };
