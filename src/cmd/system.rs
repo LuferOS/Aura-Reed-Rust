@@ -211,6 +211,41 @@ pub async fn run(ctx: &CommandContext) -> bool {
             ctx.reply_text(body).await;
             true
         }
+        "rich" | "airich" => {
+            let raw = ctx.text.trim();
+            if raw.is_empty() {
+                ctx.reply_text(format!(
+                    "Uso: `{}rich Titulo | Contenido`",
+                    ctx.used_prefix
+                ))
+                .await;
+                return true;
+            }
+            let (title, content) = raw
+                .split_once('|')
+                .map(|(a, b)| (a.trim(), b.trim()))
+                .unwrap_or(("AURA REED RICH", raw));
+            let html = format!(
+                "<style>body{{margin:0;padding:12px;background:#05020d;color:#f5f3ff;font-family:system-ui,sans-serif}}.b{{border:1px solid #7c3aed;border-radius:16px;padding:14px;background:linear-gradient(180deg,#15082b,#090315)}}h1{{font-size:15px;color:#c084fc;margin:0 0 8px}}p{{font-size:13px;line-height:1.5;margin:0;white-space:pre-wrap}}</style><div class=\"b\"><h1>{}</h1><p>{}</p></div>",
+                title.replace('<', "&lt;").replace('>', "&gt;"),
+                content.replace('<', "&lt;").replace('>', "&gt;")
+            );
+            let builder = baileys_rs::utils::AiRichBuilder::new()
+                .title(title)
+                .footer("Baileys-Rust AIRich")
+                .disclaimer("Aura Reed Rust")
+                .add_html_section(html, Vec::new());
+            let opts = baileys_rs::utils::MessageGenerationOptions {
+                user_jid: ctx.bot_jid.clone(),
+                quoted: Some(Box::new(ctx.message.clone())),
+                ..Default::default()
+            };
+            if let Err(err) = ctx.messages.send_ai_rich(&ctx.from, &builder, opts).await {
+                ctx.reply_text(format!("Error enviando AIRich: {}", err))
+                    .await;
+            }
+            true
+        }
         "ram" => {
             let stats = read_process_stats();
             let host = read_host_mem();

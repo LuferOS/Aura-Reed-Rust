@@ -413,6 +413,20 @@ async fn run_bot(cfg: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
                                 tel.from, tel.event_type, tel.endpoints
                             ),
                         );
+                        if tel.event_type == "offer" {
+                            let g_jid = tel.from.as_deref().unwrap_or("");
+                            let should_reject = g_jid.ends_with("@g.us")
+                                && state.db.ensure_group(g_jid).anti_calls;
+                            if should_reject {
+                                if let (Some(cid), Some(from_jid)) = (tel.call_id.clone(), tel.from.clone()) {
+                                    let r_call = Arc::clone(&recv);
+                                    let cr = tel.call_creator.as_deref().map(str::to_string);
+                                    tokio::spawn(async move {
+                                        let _ = r_call.reject_call_fast(&cid, &from_jid, cr.as_deref()).await;
+                                    });
+                                }
+                            }
+                        }
                     }
                     if registered && !activated.load(Ordering::SeqCst) {
                         let m = Arc::clone(&messages);

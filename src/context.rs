@@ -207,6 +207,7 @@ pub fn is_participant_admin(meta: &GroupMetadata, target: &str) -> bool {
         .any(|p| participant_matches(p, target) && p.admin.is_some())
 }
 
+#[allow(dead_code)]
 pub struct PreparedVideo {
     pub bytes: Vec<u8>,
     pub thumbnail: Option<Vec<u8>>,
