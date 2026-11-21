@@ -187,19 +187,22 @@ async fn run_bot(cfg: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 
     let wa_version = resolve_wa_version(&cfg.data_dir).await;
     let db = Arc::new(AuraDb::open(&cfg.data_dir)?);
+    let is_perf = cfg.mode.is_perf();
+    db.apply_mode(is_perf);
 
     let state = Arc::new(BotState {
         config: cfg.clone(),
         started_at: Instant::now(),
         wa_version,
         processed_msgs: AtomicU64::new(0),
+        mode_perf: AtomicBool::new(is_perf),
         db: Arc::clone(&db),
-        snipe: Arc::new(SnipeStore::new()),
+        snipe: Arc::new(SnipeStore::new(if is_perf { 96 } else { 24 })),
         debug: Arc::new(DebugState::new(cfg.debug_enabled)),
-        subbots: Arc::new(SubBotManager::new(128)),
-        http: BotState::build_http_client(),
-        cmd_semaphore: Arc::new(Semaphore::new(8)),
-        ffmpeg_sem: Arc::new(Semaphore::new(2)),
+        subbots: Arc::new(SubBotManager::new(if is_perf { 256 } else { 64 })),
+        http: BotState::build_http_client(is_perf),
+        cmd_semaphore: Arc::new(Semaphore::new(if is_perf { 24 } else { 4 })),
+        ffmpeg_sem: Arc::new(Semaphore::new(if is_perf { 2 } else { 1 })),
         creds_lock: Arc::new(Mutex::new(())),
         proposals: std::sync::Mutex::new(std::collections::HashMap::new()),
         spam_tracker: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -215,7 +218,8 @@ async fn run_bot(cfg: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 
     let db_maint = Arc::clone(&db);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(180));
+        let maint_secs = if is_perf { 300 } else { 90 };
+        let mut interval = tokio::time::interval(Duration::from_secs(maint_secs));
         loop {
             interval.tick().await;
             db_maint.maintenance();
@@ -223,9 +227,10 @@ async fn run_bot(cfg: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     });
 
     println!(
-        "{} Rust v{} | WA Web {}.{}.{} | workers={} | debug={}",
+        "{} Rust v{} | mode={} | WA Web {}.{}.{} | workers={} | debug={}",
         DEFAULT_BOT_NAME,
         DEFAULT_BOT_VERSION,
+        cfg.mode.as_str(),
         wa_version[0],
         wa_version[1],
         wa_version[2],
@@ -449,7 +454,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = AppConfig::from_env_and_args();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cfg.worker_threads)
-        .max_blocking_threads(4)
+        .max_blocking_threads(if cfg.mode.is_perf() { 8 } else { 2 })
         .thread_stack_size(1024 * 1024)
         .enable_all()
         .build()?;

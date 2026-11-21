@@ -1,4 +1,4 @@
-use crate::config::AppConfig;
+use crate::config::{save_runtime_mode, AppConfig, RuntimeMode};
 use crate::db::{AuraDb, UserRecord};
 use crate::debug::DebugState;
 use crate::snipe::SnipeStore;
@@ -15,7 +15,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use sha2::{Digest, Sha256};
 use std::borrow::Borrow;
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
@@ -55,6 +55,7 @@ pub struct BotState {
     pub started_at: Instant,
     pub wa_version: [u32; 3],
     pub processed_msgs: AtomicU64,
+    pub mode_perf: AtomicBool,
     pub db: Arc<AuraDb>,
     pub snipe: Arc<SnipeStore>,
     pub debug: Arc<DebugState>,
@@ -72,17 +73,53 @@ pub struct BotState {
 }
 
 impl BotState {
-    pub fn build_http_client() -> reqwest::Client {
+    pub fn build_http_client(perf: bool) -> reqwest::Client {
+        let (max_idle, idle_secs) = if perf { (6, 45) } else { (1, 10) };
         reqwest::Client::builder()
             .tcp_nodelay(true)
             .tcp_keepalive(Duration::from_secs(30))
-            .pool_idle_timeout(Duration::from_secs(20))
-            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(Duration::from_secs(idle_secs))
+            .pool_max_idle_per_host(max_idle)
             .http2_adaptive_window(true)
             .connect_timeout(Duration::from_secs(12))
             .timeout(Duration::from_secs(90))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new())
+    }
+
+    pub fn current_mode(&self) -> RuntimeMode {
+        if self.mode_perf.load(Ordering::Relaxed) {
+            RuntimeMode::Perf
+        } else {
+            RuntimeMode::Eco
+        }
+    }
+
+    pub fn set_runtime_mode(&self, mode: RuntimeMode) {
+        let perf = mode.is_perf();
+        self.mode_perf.store(perf, Ordering::Relaxed);
+        self.db.apply_mode(perf);
+        self.snipe.set_capacity(if perf { 96 } else { 24 });
+        if let Ok(mut gm) = self.group_meta_cache.lock() {
+            let cap = if perf { 48 } else { 12 };
+            if gm.len() > cap {
+                gm.clear();
+            }
+            gm.shrink_to_fit();
+        }
+        if let Ok(mut st) = self.spam_tracker.lock() {
+            if !perf {
+                st.clear();
+                st.shrink_to_fit();
+            }
+        }
+        if let Ok(mut ga) = self.group_activity.lock() {
+            if !perf && ga.len() > 8 {
+                ga.clear();
+                ga.shrink_to_fit();
+            }
+        }
+        save_runtime_mode(&self.config.data_dir, mode);
     }
 
     pub async fn get_group_metadata(

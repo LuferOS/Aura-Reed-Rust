@@ -196,7 +196,7 @@ fn render_category_block(p: &str, cat: &str) -> Option<String> {
         "system" => Some(menu_category_box(
             "SYSTEM",
             &[
-                (&["ping", "info", "infobot", "ram"], "Latencia, estado y memoria RAM."),
+                (&["ping", "info", "ram", "modo"], "Latencia, estado, RAM y modo eco/perf."),
                 (&["snipe", "lang", "subbotstats"], "Mensajes borrados, idiomas y cluster."),
                 (&["autoadmin", "bc", "r", "restart", "debug"], "Herramientas de owner."),
             ],

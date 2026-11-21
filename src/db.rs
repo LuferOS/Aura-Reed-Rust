@@ -43,6 +43,7 @@ pub struct GachaDrawRecord {
 }
 
 #[allow(dead_code)]
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct GachaHaremEntry {
     pub character_id: String,
@@ -119,6 +120,20 @@ impl<V: Clone> BoundedCache<V> {
 
     fn remove(&mut self, key: &str) {
         self.map.remove(key);
+    }
+
+    fn resize(&mut self, new_cap: usize) {
+        self.cap = new_cap.max(8);
+        while self.map.len() > self.cap {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            } else {
+                self.map.clear();
+                break;
+            }
+        }
+        self.map.shrink_to_fit();
+        self.order.shrink_to_fit();
     }
 }
 
@@ -1273,6 +1288,31 @@ impl AuraDb {
             );
         }
         moved
+    }
+
+    pub fn apply_mode(&self, perf: bool) {
+        let (u_cap, g_cap, pragmas) = if perf {
+            (
+                256usize,
+                128usize,
+                "PRAGMA cache_size = -4096; PRAGMA temp_store = MEMORY;",
+            )
+        } else {
+            (
+                48usize,
+                24usize,
+                "PRAGMA cache_size = -512; PRAGMA temp_store = FILE; PRAGMA wal_checkpoint(TRUNCATE); PRAGMA shrink_memory;",
+            )
+        };
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute_batch(pragmas);
+        }
+        if let Ok(mut uc) = self.users_cache.lock() {
+            uc.resize(u_cap);
+        }
+        if let Ok(mut gc) = self.groups_cache.lock() {
+            gc.resize(g_cap);
+        }
     }
 
     pub fn maintenance(&self) {

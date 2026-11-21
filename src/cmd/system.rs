@@ -151,6 +151,66 @@ pub async fn run(ctx: &CommandContext) -> bool {
             ctx.reply_text(body).await;
             true
         }
+        "mode" | "modo" => {
+            let cur = ctx.state.current_mode();
+            let raw = ctx.args.first().map(String::as_str).unwrap_or("");
+            if raw.is_empty() {
+                let stats = read_process_stats();
+                let body = format!(
+                    "{}\n\n{}",
+                    box_section(
+                        "⚡",
+                        "MODO DEL BOT",
+                        &[
+                            format!("> {} › *{}*", fyt_bold("Actual"), cur.label()),
+                            format!("> {} › {:.2} MB (pico {:.2} MB)", fyt_bold("RAM"), stats.rss_mb, stats.hwm_mb),
+                            format!("> {} › {} | Workers › {}", fyt_bold("Hilos"), stats.threads, ctx.state.config.worker_threads),
+                            format!("> {} › `{}modo eco` (bajo consumo)", fyt_bold("Cambiar"), ctx.used_prefix),
+                            format!("> {} › `{}modo perf` (rendimiento)", fyt_bold("Cambiar"), ctx.used_prefix),
+                        ],
+                    ),
+                    footer_tag(DEFAULT_BOT_NAME)
+                );
+                ctx.reply_text(body).await;
+                return true;
+            }
+            if !ctx.is_owner && !matches!(ctx.user.role.as_str(), "owner" | "coowner" | "mod") {
+                ctx.reply_text("Solo owners y moderadores pueden cambiar el modo del bot.")
+                    .await;
+                return true;
+            }
+            let Some(next_mode) = crate::config::RuntimeMode::parse(raw) else {
+                ctx.reply_text(format!(
+                    "Modo invalido. Usa `{}modo eco` o `{}modo perf`.",
+                    ctx.used_prefix, ctx.used_prefix
+                ))
+                .await;
+                return true;
+            };
+            ctx.state.set_runtime_mode(next_mode);
+            let stats = read_process_stats();
+            let note = if next_mode.is_perf() {
+                "Cache SQLite 4MB + caches amplios + modo Rich listo."
+            } else {
+                "Cache SQLite 512KB + shrink_memory + caches reducidos."
+            };
+            let body = format!(
+                "{}\n\n{}",
+                box_section(
+                    "✅",
+                    "MODO ACTUALIZADO",
+                    &[
+                        format!("> {} › *{}*", fyt_bold("Nuevo modo"), next_mode.label()),
+                        format!("> {} › {:.2} MB", fyt_bold("RAM actual"), stats.rss_mb),
+                        format!("> {}", note),
+                        format!("> Reinicia con `{}restart` para ajustar workers de Tokio.", ctx.used_prefix),
+                    ],
+                ),
+                footer_tag(DEFAULT_BOT_NAME)
+            );
+            ctx.reply_text(body).await;
+            true
+        }
         "ram" => {
             let stats = read_process_stats();
             let host = read_host_mem();
@@ -216,6 +276,7 @@ pub async fn run(ctx: &CommandContext) -> bool {
                         snap.total_commands
                     ),
                     format!("> {} › {}", fyt_bold("SubBots"), subbots),
+                    format!("> {} › {}", fyt_bold("Modo"), ctx.state.current_mode().label()),
                 ],
             );
 

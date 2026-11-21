@@ -1,8 +1,8 @@
 #![allow(dead_code)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_BOT_NAME: &str = "AURA REED";
-pub const DEFAULT_BOT_VERSION: &str = "2.5.0";
+pub const DEFAULT_BOT_VERSION: &str = "3.1.1-beta";
 pub const DEFAULT_BOT_AUTHOR: &str = "Powered By: LuferOS";
 pub const CHANNEL_ID: &str = "120363410945728976@newsletter";
 
@@ -15,6 +15,50 @@ pub const DEFAULT_OWNERS: &[(&str, Option<&str>)] = &[
     ("276772692222150@lid", Some("525538176300@s.whatsapp.net")),
     ("40763551416477@lid", None),
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeMode {
+    Eco,
+    Perf,
+}
+
+impl RuntimeMode {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "eco" | "low" | "bajo" | "bajoconsumo" | "ahorro" | "lite" => Some(Self::Eco),
+            "perf" | "performance" | "rendimiento" | "turbo" | "fast" | "alto" => Some(Self::Perf),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Eco => "eco",
+            Self::Perf => "perf",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Eco => "Bajo Consumo (ECO)",
+            Self::Perf => "Rendimiento (PERF)",
+        }
+    }
+
+    pub fn is_perf(self) -> bool {
+        matches!(self, Self::Perf)
+    }
+}
+
+pub fn load_saved_mode(data_dir: &Path) -> Option<RuntimeMode> {
+    let raw = std::fs::read_to_string(data_dir.join("runtime_mode.txt")).ok()?;
+    RuntimeMode::parse(&raw)
+}
+
+pub fn save_runtime_mode(data_dir: &Path, mode: RuntimeMode) {
+    let _ = std::fs::create_dir_all(data_dir);
+    let _ = std::fs::write(data_dir.join("runtime_mode.txt"), mode.as_str());
+}
 
 #[derive(Debug, Clone)]
 pub struct ApiEndpoint {
@@ -69,13 +113,17 @@ pub struct AppConfig {
     pub worker_threads: usize,
     pub debug_enabled: bool,
     pub start_subbots: bool,
+    pub mode: RuntimeMode,
 }
 
-fn detected_cores() -> usize {
-    std::thread::available_parallelism()
+fn default_threads_for_mode(mode: RuntimeMode) -> usize {
+    let cores = std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(2)
-        .clamp(1, 2)
+        .unwrap_or(2);
+    match mode {
+        RuntimeMode::Eco => 1,
+        RuntimeMode::Perf => cores.clamp(2, 4),
+    }
 }
 
 impl AppConfig {
@@ -91,11 +139,17 @@ impl AppConfig {
 
         let mut pair_phone = std::env::var("PAIR_NUMBER").ok();
         let mut prefixes: Vec<String> = DEFAULT_PREFIXES.iter().map(|s| (*s).to_string()).collect();
-        let mut worker_threads = std::env::var("AURA_THREADS")
+        let mut mode = std::env::var("AURA_MODE")
+            .ok()
+            .and_then(|v| RuntimeMode::parse(&v))
+            .or_else(|| load_saved_mode(&data_dir))
+            .unwrap_or(RuntimeMode::Eco);
+
+        let mut custom_threads = std::env::var("AURA_THREADS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .filter(|&n| n >= 1)
-            .unwrap_or_else(detected_cores);
+            .filter(|&n| n >= 1);
+
         let mut debug_enabled = std::env::var("AURA_DEBUG")
             .ok()
             .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"));
@@ -126,10 +180,24 @@ impl AppConfig {
                     pair_phone = Some(args[i + 1].clone());
                     i += 2;
                 }
+                "--mode" if i + 1 < args.len() => {
+                    if let Some(m) = RuntimeMode::parse(&args[i + 1]) {
+                        mode = m;
+                    }
+                    i += 2;
+                }
+                "--eco" => {
+                    mode = RuntimeMode::Eco;
+                    i += 1;
+                }
+                "--perf" => {
+                    mode = RuntimeMode::Perf;
+                    i += 1;
+                }
                 "--threads" if i + 1 < args.len() => {
                     if let Ok(n) = args[i + 1].parse::<usize>() {
                         if n >= 1 {
-                            worker_threads = n;
+                            custom_threads = Some(n);
                         }
                     }
                     i += 2;
@@ -141,6 +209,8 @@ impl AppConfig {
                 _ => i += 1,
             }
         }
+
+        let worker_threads = custom_threads.unwrap_or_else(|| default_threads_for_mode(mode));
 
         Self {
             main_session_dir,
@@ -155,6 +225,7 @@ impl AppConfig {
             worker_threads,
             debug_enabled,
             start_subbots,
+            mode,
         }
     }
 }
