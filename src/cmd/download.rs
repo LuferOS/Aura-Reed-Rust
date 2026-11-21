@@ -200,7 +200,7 @@ fn extract_attr_href_near(html: &str, marker: &str) -> Option<String> {
 pub async fn run(ctx: &CommandContext) -> bool {
     let query = ctx.text.trim();
     match ctx.cmd_name.as_str() {
-        "play" | "ytmp3" | "yta" => {
+        "play" | "ytmp3" | "yta" | "playaudio" | "docplay" | "ytdmp3" | "dmp3" | "dyta" | "docaudio" => {
             if query.is_empty() {
                 ctx.reply_text(format!("Uso: `{}play <cancion o enlace YouTube>`", ctx.used_prefix))
                     .await;
@@ -219,7 +219,14 @@ pub async fn run(ctx: &CommandContext) -> bool {
             match resolve_yt_download_link(ctx, &yt_url, false).await {
                 Ok(dl_url) => match download_bytes_capped(ctx, &dl_url, MAX_MEDIA_BYTES).await {
                     Ok((bytes, _)) => {
-                        if let Err(err) = ctx.send_audio_bytes(bytes, "audio/mpeg", false).await {
+                        let as_doc = matches!(ctx.cmd_name.as_str(), "docplay" | "ytdmp3" | "dmp3" | "dyta" | "docaudio");
+                        let send_res = if as_doc {
+                            let fname = format!("{}.mp3", title.replace('/', "_").chars().take(60).collect::<String>());
+                            ctx.send_document_bytes(bytes, &fname, "audio/mpeg", Some(format!("*{}*", title))).await
+                        } else {
+                            ctx.send_audio_bytes(bytes, "audio/mpeg", false).await
+                        };
+                        if let Err(err) = send_res {
                             ctx.reply_text(format!("Error enviando audio: {}", err))
                                 .await;
                         }
@@ -233,7 +240,7 @@ pub async fn run(ctx: &CommandContext) -> bool {
             }
             true
         }
-        "play2" | "ytmp4" | "ytv" => {
+        "play2" | "ytmp4" | "ytv" | "mp4" | "playvideo" | "docplay2" | "dytmp4" | "dmp4" | "dytv" | "docvideo" => {
             if query.is_empty() {
                 ctx.reply_text(format!("Uso: `{}play2 <video o enlace YouTube>`", ctx.used_prefix))
                     .await;
@@ -252,9 +259,14 @@ pub async fn run(ctx: &CommandContext) -> bool {
             match resolve_yt_download_link(ctx, &yt_url, true).await {
                 Ok(dl_url) => match download_bytes_capped(ctx, &dl_url, MAX_MEDIA_BYTES).await {
                     Ok((bytes, _)) => {
-                        if let Err(err) = ctx
-                            .send_video_bytes(bytes, Some(format!("*{}*", title)), "video/mp4")
-                            .await
+                        let as_doc = matches!(ctx.cmd_name.as_str(), "docplay2" | "dytmp4" | "dmp4" | "dytv" | "docvideo");
+                        let send_res = if as_doc {
+                            let fname = format!("{}.mp4", title.replace('/', "_").chars().take(60).collect::<String>());
+                            ctx.send_document_bytes(bytes, &fname, "video/mp4", Some(format!("*{}*", title))).await
+                        } else {
+                            ctx.send_video_bytes(bytes, Some(format!("*{}*", title)), "video/mp4").await
+                        };
+                        if let Err(err) = send_res
                         {
                             ctx.reply_text(format!("Error enviando video: {}", err))
                                 .await;
@@ -269,13 +281,14 @@ pub async fn run(ctx: &CommandContext) -> bool {
             }
             true
         }
-        "tiktok" | "tt" | "ttdl" | "tiktok2" | "ttaudio" | "tta" => {
+        "tiktok" | "tt" | "ttdl" | "tiktok2" | "dtk" | "dtt" | "dttv" | "doctiktok" | "tt2" | "ttaudio" | "tta" | "tka" | "doctta" | "dtta" | "dtka" | "docttaudio" => {
             if query.is_empty() {
                 ctx.reply_text(format!("Uso: `{}tiktok <enlace o busqueda>`", ctx.used_prefix))
                     .await;
                 return true;
             }
-            let want_audio = matches!(ctx.cmd_name.as_str(), "ttaudio" | "tta");
+            let want_audio = matches!(ctx.cmd_name.as_str(), "ttaudio" | "tta" | "tka" | "doctta" | "dtta" | "dtka" | "docttaudio");
+            let as_doc = matches!(ctx.cmd_name.as_str(), "tiktok2" | "dtk" | "dtt" | "dttv" | "doctiktok" | "tt2" | "doctta" | "dtta" | "dtka" | "docttaudio");
             let tt_url = if query.contains("tiktok.com/") {
                 query.to_string()
             } else {
@@ -326,7 +339,12 @@ pub async fn run(ctx: &CommandContext) -> bool {
                 };
                 match download_bytes_capped(ctx, &music, MAX_MEDIA_BYTES).await {
                     Ok((bytes, _)) => {
-                        if let Err(err) = ctx.send_audio_bytes(bytes, "audio/mpeg", false).await {
+                        let res = if as_doc {
+                            ctx.send_document_bytes(bytes, "tiktok_audio.mp3", "audio/mpeg", Some(title.clone())).await
+                        } else {
+                            ctx.send_audio_bytes(bytes, "audio/mpeg", false).await
+                        };
+                        if let Err(err) = res {
                             ctx.reply_text(format!("Error enviando audio: {}", err))
                                 .await;
                         }
@@ -352,7 +370,12 @@ pub async fn run(ctx: &CommandContext) -> bool {
             match download_bytes_capped(ctx, &video_url, MAX_MEDIA_BYTES).await {
                 Ok((bytes, _)) => {
                     let cap: String = title.chars().take(240).collect();
-                    if let Err(err) = ctx.send_video_bytes(bytes, Some(cap), "video/mp4").await {
+                    let res = if as_doc {
+                        ctx.send_document_bytes(bytes, "tiktok.mp4", "video/mp4", Some(cap)).await
+                    } else {
+                        ctx.send_video_bytes(bytes, Some(cap), "video/mp4").await
+                    };
+                    if let Err(err) = res {
                         ctx.reply_text(format!("Error enviando video: {}", err))
                             .await;
                     }
@@ -447,7 +470,7 @@ pub async fn run(ctx: &CommandContext) -> bool {
             }
             true
         }
-        "spotify" | "splay" | "sp" | "spdl" => {
+        "spotify" | "splay" | "sp" | "spdl" | "spotifydoc" | "docsplay" | "dsp" | "dspdl" => {
             if query.is_empty() {
                 ctx.reply_text(format!("Uso: `{}spotify <cancion o enlace>`", ctx.used_prefix))
                     .await;
@@ -474,7 +497,14 @@ pub async fn run(ctx: &CommandContext) -> bool {
                         ctx.reply_text(format!("Descargando Spotify: *{}*", title)).await;
                         match download_bytes_capped(ctx, &dl, MAX_MEDIA_BYTES).await {
                             Ok((bytes, _)) => {
-                                if let Err(err) = ctx.send_audio_bytes(bytes, "audio/mpeg", false).await {
+                                let as_doc = matches!(ctx.cmd_name.as_str(), "spotifydoc" | "docsplay" | "dsp" | "dspdl");
+                                let res = if as_doc {
+                                    let fname = format!("{}.mp3", title.replace('/', "_").chars().take(60).collect::<String>());
+                                    ctx.send_document_bytes(bytes, &fname, "audio/mpeg", Some(format!("*{}*", title))).await
+                                } else {
+                                    ctx.send_audio_bytes(bytes, "audio/mpeg", false).await
+                                };
+                                if let Err(err) = res {
                                     ctx.reply_text(format!("Error enviando audio Spotify: {}", err)).await;
                                 }
                             }

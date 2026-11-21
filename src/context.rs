@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
 
-const MAX_GROUP_META_CACHE: usize = 64;
+const MAX_GROUP_META_CACHE: usize = 24;
 const GROUP_META_TTL_SECS: u64 = 300;
 
 #[derive(Debug, Clone)]
@@ -55,6 +55,7 @@ pub struct BotState {
     pub spam_tracker: std::sync::Mutex<HashMap<String, VecDeque<Instant>>>,
     pub group_meta_cache: std::sync::Mutex<HashMap<String, (GroupMetadata, Instant)>>,
     pub hangman_games: std::sync::Mutex<HashMap<String, HangmanGame>>,
+    pub group_activity: std::sync::Mutex<HashMap<String, HashMap<String, u32>>>,
 }
 
 impl BotState {
@@ -62,8 +63,8 @@ impl BotState {
         reqwest::Client::builder()
             .tcp_nodelay(true)
             .tcp_keepalive(Duration::from_secs(30))
-            .pool_idle_timeout(Duration::from_secs(60))
-            .pool_max_idle_per_host(8)
+            .pool_idle_timeout(Duration::from_secs(20))
+            .pool_max_idle_per_host(2)
             .http2_adaptive_window(true)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(25))
@@ -94,6 +95,36 @@ impl BotState {
             cache.insert(jid.to_string(), (fetched.clone(), Instant::now()));
         }
         Some(fetched)
+    }
+
+
+    pub fn record_group_activity(&self, group_jid: &str, user_jid: &str) {
+        if let Ok(mut map) = self.group_activity.lock() {
+            if map.len() > 32 && !map.contains_key(group_jid) {
+                map.clear();
+            }
+            let group_map = map.entry(group_jid.to_string()).or_default();
+            if group_map.len() > 256 && !group_map.contains_key(user_jid) {
+                return;
+            }
+            *group_map.entry(user_jid.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    pub fn top_group_activity(&self, group_jid: &str, limit: usize) -> Vec<(String, u32)> {
+        let Ok(map) = self.group_activity.lock() else {
+            return Vec::new();
+        };
+        let Some(group_map) = map.get(group_jid) else {
+            return Vec::new();
+        };
+        let mut list: Vec<(String, u32)> = group_map
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        list.sort_by(|a, b| b.1.cmp(&a.1));
+        list.truncate(limit);
+        list
     }
 
     pub fn invalidate_group_metadata(&self, jid: &str) {

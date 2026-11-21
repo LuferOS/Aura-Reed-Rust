@@ -196,14 +196,15 @@ async fn run_bot(cfg: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
         db: Arc::clone(&db),
         snipe: Arc::new(SnipeStore::new()),
         debug: Arc::new(DebugState::new(cfg.debug_enabled)),
-        subbots: Arc::new(SubBotManager::new(512)),
+        subbots: Arc::new(SubBotManager::new(128)),
         http: BotState::build_http_client(),
-        cmd_semaphore: Arc::new(Semaphore::new(16)),
+        cmd_semaphore: Arc::new(Semaphore::new(8)),
         creds_lock: Arc::new(Mutex::new(())),
         proposals: std::sync::Mutex::new(std::collections::HashMap::new()),
         spam_tracker: std::sync::Mutex::new(std::collections::HashMap::new()),
         group_meta_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         hangman_games: std::sync::Mutex::new(std::collections::HashMap::new()),
+        group_activity: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     if cfg.start_subbots {
@@ -212,10 +213,10 @@ async fn run_bot(cfg: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
 
     let db_maint = Arc::clone(&db);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        let mut interval = tokio::time::interval(Duration::from_secs(180));
         loop {
             interval.tick().await;
-            db_maint.checkpoint();
+            db_maint.maintenance();
         }
     });
 
@@ -446,8 +447,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg = AppConfig::from_env_and_args();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cfg.worker_threads)
-        .max_blocking_threads(16)
-        .thread_stack_size(512 * 1024)
+        .max_blocking_threads(4)
+        .thread_stack_size(256 * 1024)
         .enable_all()
         .build()?;
 

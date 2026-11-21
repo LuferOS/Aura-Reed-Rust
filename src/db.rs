@@ -5,8 +5,8 @@ use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::Mutex;
 
-const MAX_USER_CACHE: usize = 512;
-const MAX_GROUP_CACHE: usize = 256;
+const MAX_USER_CACHE: usize = 128;
+const MAX_GROUP_CACHE: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserRecord {
@@ -166,8 +166,9 @@ impl AuraDb {
              PRAGMA foreign_keys = ON;
              PRAGMA wal_autocheckpoint = 1000;
              PRAGMA busy_timeout = 10000;
-             PRAGMA cache_size = -4000;
-             PRAGMA temp_store = MEMORY;
+             PRAGMA cache_size = -1024;
+             PRAGMA mmap_size = 0;
+             PRAGMA temp_store = FILE;
 
              CREATE TABLE IF NOT EXISTS users (
                 jid TEXT PRIMARY KEY,
@@ -277,7 +278,13 @@ impl AuraDb {
                 character_id TEXT NOT NULL,
                 image_id INTEGER NOT NULL,
                 PRIMARY KEY (group_jid, user_jid)
-             );",
+             );
+
+             CREATE INDEX IF NOT EXISTS idx_users_bal ON users (coins, bank);
+             CREATE INDEX IF NOT EXISTS idx_users_aura ON users (aura_points DESC);
+             CREATE INDEX IF NOT EXISTS idx_gacha_harem_owner ON gacha_harem (group_jid, owner_jid);
+             CREATE INDEX IF NOT EXISTS idx_gacha_market_group ON gacha_market (group_jid);
+             CREATE INDEX IF NOT EXISTS idx_gacha_draws_lookup ON gacha_draws (group_jid, character_id, expires_at);",
         )?;
 
         Ok(Self {
@@ -1163,6 +1170,115 @@ impl AuraDb {
             );
         }
         self.invalidate_user(jid);
+    }
+
+
+    pub fn list_known_groups(&self) -> Vec<String> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) = conn.prepare("SELECT jid FROM groups WHERE botOnline = 1") else {
+            return Vec::new();
+        };
+        let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
+            return Vec::new();
+        };
+        rows.filter_map(Result::ok).collect()
+    }
+
+    pub fn list_blocked_categories(&self, group_jid: &str) -> Vec<String> {
+        let _ = self.ensure_group(group_jid);
+        let raw: String = self
+            .conn
+            .lock()
+            .ok()
+            .and_then(|conn| {
+                conn.query_row(
+                    r#"SELECT COALESCE(catBlocked, '["nsfw"]') FROM groups WHERE jid = ?1"#,
+                    params![group_jid],
+                    |r| r.get(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+            })
+            .unwrap_or_else(|| r#"["nsfw"]"#.to_string());
+        serde_json::from_str(&raw).unwrap_or_default()
+    }
+
+    pub fn get_bot_setting(&self, bot_jid: &str) -> (String, String, String) {
+        let fallback = (
+            crate::config::DEFAULT_BOT_NAME.to_string(),
+            "AuraCoins".to_string(),
+            "₡".to_string(),
+        );
+        let Ok(conn) = self.conn.lock() else {
+            return fallback;
+        };
+        conn.query_row(
+            "SELECT COALESCE(bot_name, ?1), COALESCE(currency, 'AuraCoins'), COALESCE(currencySymbol, '₡') FROM bots WHERE jid = ?2",
+            params![crate::config::DEFAULT_BOT_NAME, bot_jid],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .unwrap_or(fallback)
+    }
+
+    pub fn set_bot_name(&self, bot_jid: &str, name: &str) {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute(
+                "INSERT INTO bots (jid, bot_id, bot_name, isMain, status) VALUES (?1, ?1, ?2, 1, 'active') ON CONFLICT(jid) DO UPDATE SET bot_name = excluded.bot_name",
+                params![bot_jid, name],
+            );
+        }
+    }
+
+    pub fn set_bot_currency(&self, bot_jid: &str, name: &str, symbol: &str) {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute(
+                "INSERT INTO bots (jid, bot_id, currency, currencySymbol, isMain, status) VALUES (?1, ?1, ?2, ?3, 1, 'active') ON CONFLICT(jid) DO UPDATE SET currency = excluded.currency, currencySymbol = excluded.currencySymbol",
+                params![bot_jid, name, symbol],
+            );
+        }
+    }
+
+    pub fn clear_gacha_favorite(&self, group_jid: &str, user_jid: &str) -> bool {
+        let Ok(conn) = self.conn.lock() else {
+            return false;
+        };
+        conn.execute(
+            "DELETE FROM gacha_favorites WHERE group_jid = ?1 AND user_jid = ?2",
+            params![group_jid, user_jid],
+        )
+        .unwrap_or(0)
+            > 0
+    }
+
+    pub fn transfer_all_harem(&self, group_jid: &str, from_jid: &str, to_jid: &str, now: u64) -> usize {
+        let Ok(conn) = self.conn.lock() else {
+            return 0;
+        };
+        let moved = conn
+            .execute(
+                "UPDATE gacha_harem SET owner_jid = ?1, claimed_at = ?2 WHERE group_jid = ?3 AND owner_jid = ?4",
+                params![to_jid, now as i64, group_jid, from_jid],
+            )
+            .unwrap_or(0);
+        if moved > 0 {
+            let _ = conn.execute(
+                "DELETE FROM gacha_market WHERE group_jid = ?1 AND seller_jid = ?2",
+                params![group_jid, from_jid],
+            );
+        }
+        moved
+    }
+
+    pub fn maintenance(&self) {
+        if let Ok(conn) = self.conn.lock() {
+            let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA shrink_memory;");
+        }
     }
 
     pub fn checkpoint(&self) {

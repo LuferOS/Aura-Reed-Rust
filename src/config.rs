@@ -74,8 +74,8 @@ pub struct AppConfig {
 fn detected_cores() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(8)
-        .max(4)
+        .unwrap_or(2)
+        .clamp(1, 2)
 }
 
 impl AppConfig {

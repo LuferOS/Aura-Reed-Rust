@@ -148,6 +148,10 @@ pub async fn run(ctx: &CommandContext) -> bool {
             | "delchar"
             | "setfav"
             | "wfav"
+            | "delfav"
+            | "gachacheck"
+            | "gcheck"
+            | "giveallharem"
             | "robwaifu"
             | "robarwaifu"
     );
@@ -886,6 +890,56 @@ pub async fn run(ctx: &CommandContext) -> bool {
                 card.character_id, card.image_id
             ))
             .await;
+            true
+        }
+        "delfav" => {
+            if ctx.state.db.clear_gacha_favorite(&ctx.from, &ctx.sender) {
+                ctx.reply_text("Carta favorita eliminada.").await;
+            } else {
+                ctx.reply_text("No tenias ninguna carta favorita.").await;
+            }
+            true
+        }
+        "gachacheck" | "gcheck" => {
+            let claimed = ctx.state.db.get_group_claimed_pairs(&ctx.from);
+            let total: usize = CATALOG.iter().map(|c| c.files.len()).sum();
+            ctx.reply_text(format!(
+                "*Verificacion Gacha*\nPersonajes: *{}*\nVariantes totales: *{}*\nReclamadas en grupo: *{}*\nDisponibles: *{}*",
+                CATALOG.len(),
+                total,
+                claimed.len(),
+                total.saturating_sub(claimed.len())
+            ))
+            .await;
+            true
+        }
+        "giveallharem" => {
+            let target = ctx.target_jid();
+            if target == ctx.sender {
+                ctx.reply_text(format!("Uso: `{}giveallharem @usuario`", ctx.used_prefix))
+                    .await;
+                return true;
+            }
+            let now = unix_timestamp_seconds();
+            let moved = ctx
+                .state
+                .db
+                .transfer_all_harem(&ctx.from, &ctx.sender, &target, now);
+            if moved == 0 {
+                ctx.reply_text("No tienes cartas para transferir en este grupo.")
+                    .await;
+            } else {
+                ctx.reply_with_mentions(
+                    format!(
+                        "@{} transfirio todo su harem (*{}* cartas) a @{}!",
+                        jid_tag(&ctx.sender),
+                        moved,
+                        jid_tag(&target)
+                    ),
+                    vec![ctx.sender.clone(), target],
+                )
+                .await;
+            }
             true
         }
         "robwaifu" | "robarwaifu" => {

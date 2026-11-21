@@ -219,6 +219,7 @@ pub async fn handle_message(
     let is_group = from.ends_with("@g.us");
 
     let prefixes = if is_group {
+        state.record_group_activity(&from, &sender);
         let g = state.db.ensure_group(&from);
         if !from_me
             && !is_owner
@@ -271,6 +272,27 @@ pub async fn handle_message(
         return;
     }
 
+    if is_group {
+        let gmap = state.db.get_group_data_map(&from);
+        let chat_banned = gmap
+            .get("chatBanned")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if chat_banned
+            && !is_owner
+            && !matches!(cmd_name.as_str(), "unbanchat" | "desbanearchat" | "unmutechat")
+        {
+            return;
+        }
+        let self_mode = gmap
+            .get("self")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if self_mode && !from_me && !is_owner {
+            return;
+        }
+    }
+
     if is_group && !is_owner && !matches!(user.role.as_str(), "owner" | "coowner" | "mod") {
         let g = state.db.ensure_group(&from);
         if g.only_admin {
@@ -303,36 +325,39 @@ pub async fn handle_message(
         received_at,
     };
 
+    let cat_open = |cat: &str| !is_group || !state.db.is_category_blocked(&ctx.from, cat);
     let handled = if cmd::system::run(&ctx).await {
         true
     } else if cmd::socket::run(&ctx).await {
         true
     } else if cmd::group::run(&ctx).await {
         true
-    } else if cmd::sticker::run(&ctx).await {
+    } else if cat_open("sticker") && cmd::sticker::run(&ctx).await {
         true
-    } else if cmd::ai::run(&ctx).await {
+    } else if cat_open("ai") && cmd::ai::run(&ctx).await {
         true
-    } else if cmd::economy::run(&ctx).await {
+    } else if cat_open("economy") && cmd::economy::run(&ctx).await {
         true
-    } else if cmd::profile::run(&ctx).await {
+    } else if cat_open("profile") && cmd::profile::run(&ctx).await {
         true
-    } else if cmd::search::run(&ctx).await {
+    } else if cat_open("search") && cmd::search::run(&ctx).await {
         true
-    } else if cmd::download::run(&ctx).await {
+    } else if cat_open("download") && cmd::download::run(&ctx).await {
         true
-    } else if cmd::gacha::run(&ctx).await {
+    } else if cat_open("gacha") && cmd::gacha::run(&ctx).await {
         true
-    } else if cmd::games::run(&ctx).await {
+    } else if cat_open("games") && cmd::games::run(&ctx).await {
         true
-    } else if cmd::stalk::run(&ctx).await {
+    } else if cat_open("stalk") && cmd::stalk::run(&ctx).await {
         true
-    } else if cmd::funy::run(&ctx).await {
+    } else if cat_open("funy") && cmd::funy::run(&ctx).await {
         true
-    } else if cmd::utils::run(&ctx).await {
+    } else if cat_open("utils") && cmd::utils::run(&ctx).await {
         true
-    } else {
+    } else if cat_open("interaccion") {
         cmd::interaccion::run(&ctx).await
+    } else {
+        false
     };
 
     if handled {

@@ -131,6 +131,165 @@ pub async fn run(ctx: &CommandContext) -> bool {
             .await;
             true
         }
+        "banchat" | "banearchat" | "mutechat" => {
+            if !require_admin(ctx, false).await {
+                return true;
+            }
+            ctx.state
+                .db
+                .set_group_data_field(&ctx.from, "chatBanned", Value::Bool(true));
+            ctx.reply_text("Chat silenciado para el bot. Usa `unbanchat` para reactivar.")
+                .await;
+            true
+        }
+        "unbanchat" | "desbanearchat" | "unmutechat" => {
+            if !require_admin(ctx, false).await {
+                return true;
+            }
+            ctx.state
+                .db
+                .set_group_data_field(&ctx.from, "chatBanned", Value::Bool(false));
+            ctx.reply_text("Bot reactivado en este grupo.").await;
+            true
+        }
+        "tempmsg" | "tempmessage" | "ephemeral" | "ephemeralmsg" => {
+            if !require_admin(ctx, true).await {
+                return true;
+            }
+            let raw = ctx.args.first().map(|s| s.to_ascii_lowercase()).unwrap_or_default();
+            let secs: Option<u32> = match raw.as_str() {
+                "off" | "0" | "disable" | "desactivar" => Some(0),
+                "1d" | "24h" | "24" | "1" => Some(86_400),
+                "7d" | "7" => Some(604_800),
+                "90d" | "90" => Some(7_776_000),
+                _ => None,
+            };
+            let Some(secs) = secs else {
+                ctx.reply_text(format!(
+                    "Uso: `{}tempmsg <24h|7d|90d|off>`",
+                    ctx.used_prefix
+                ))
+                .await;
+                return true;
+            };
+            match ctx.messages.socket.group_toggle_ephemeral(&ctx.from, secs).await {
+                Ok(_) => {
+                    ctx.invalidate_group_cache();
+                    let label = match secs {
+                        0 => "desactivados",
+                        86_400 => "24 horas",
+                        604_800 => "7 dias",
+                        _ => "90 dias",
+                    };
+                    ctx.reply_text(format!("Mensajes temporales configurados a: *{}*.", label))
+                        .await;
+                }
+                Err(err) => ctx.reply_text(format!("Error configurando temporales: {}", err)).await,
+            }
+            true
+        }
+        "topactivos" | "activos" => {
+            if !ctx.is_group {
+                ctx.reply_text("Este comando solo funciona en grupos.")
+                    .await;
+                return true;
+            }
+            let top = ctx.state.top_group_activity(&ctx.from, 10);
+            if top.is_empty() {
+                ctx.reply_text("Aun no hay actividad registrada desde el ultimo arranque.")
+                    .await;
+                return true;
+            }
+            let mentions: Vec<String> = top.iter().map(|(j, _)| j.clone()).collect();
+            let lines: Vec<String> = top
+                .iter()
+                .enumerate()
+                .map(|(i, (j, cnt))| format!("{}. @{} — *{}* msgs", i + 1, jid_tag(j), cnt))
+                .collect();
+            ctx.reply_with_mentions(
+                format!(
+                    "{}\n\n{}",
+                    crate::ui::box_section("🔥", "TOP ACTIVOS", &lines),
+                    crate::ui::footer_tag(crate::config::DEFAULT_BOT_NAME)
+                ),
+                mentions,
+            )
+            .await;
+            true
+        }
+        "disable" | "enable" => {
+            if !require_admin(ctx, false).await {
+                return true;
+            }
+            let valid = ["ai", "download", "economy", "funy", "gacha", "games", "interaccion", "nsfw", "profile", "search", "stalk", "sticker", "utils"];
+            let cat = ctx.args.first().map(|s| s.to_ascii_lowercase()).unwrap_or_default();
+            if !valid.contains(&cat.as_str()) {
+                let blocked = ctx.state.db.list_blocked_categories(&ctx.from);
+                ctx.reply_text(format!(
+                    "Uso: `{}{} <categoria>`\nCategorias: {}\nBloqueadas: {}",
+                    ctx.used_prefix,
+                    ctx.cmd_name,
+                    valid.join(", "),
+                    if blocked.is_empty() { "ninguna".to_string() } else { blocked.join(", ") }
+                ))
+                .await;
+                return true;
+            }
+            let block = ctx.cmd_name == "disable";
+            ctx.state.db.set_category_blocked(&ctx.from, &cat, block);
+            ctx.reply_text(format!(
+                "Categoria *{}* ahora esta *{}* en este grupo.",
+                cat,
+                if block { "desactivada" } else { "activada" }
+            ))
+            .await;
+            true
+        }
+        "adminsystem" | "adminsys" | "configgrupo" | "groupconfig" => {
+            if !ctx.is_group {
+                ctx.reply_text("Este comando solo funciona en grupos.")
+                    .await;
+                return true;
+            }
+            let g = ctx.state.db.ensure_group(&ctx.from);
+            let map = ctx.state.db.get_group_data_map(&ctx.from);
+            let blocked = ctx.state.db.list_blocked_categories(&ctx.from);
+            let warn_lim = ctx.state.db.get_group_warn_limit(&ctx.from);
+            let st = |b: bool| if b { "✅ ON" } else { "❌ OFF" };
+            let body = format!(
+                "{}\n\n{}",
+                crate::ui::box_section(
+                    "🛡️",
+                    "CONFIGURACION DEL GRUPO",
+                    &[
+                        format!("> Bot activo › {}", st(g.bot_online)),
+                        format!("> AntiLink › {} | AntiToxic › {}", st(g.antilink), st(g.anti_toxic)),
+                        format!("> AntiSpam › {} | AntiCalls › {}", st(g.anti_spam), st(g.anti_calls)),
+                        format!("> OnlyAdmin › {} | Self › {}", st(g.only_admin), st(map.get("self").and_then(Value::as_bool).unwrap_or(false))),
+                        format!("> Welcome › {} | Bye › {}", st(map.get("welcome").and_then(Value::as_bool).unwrap_or(false)), st(map.get("bye").and_then(Value::as_bool).unwrap_or(false))),
+                        format!("> Warn limit › {} | Prefijo › {}", warn_lim, g.prefix.as_deref().unwrap_or("global")),
+                        format!("> Bloqueadas › {}", if blocked.is_empty() { "ninguna".to_string() } else { blocked.join(", ") }),
+                    ],
+                ),
+                crate::ui::footer_tag(crate::config::DEFAULT_BOT_NAME)
+            );
+            ctx.reply_text(body).await;
+            true
+        }
+        "testwelcome" | "testbienvenida" => {
+            if !ctx.is_group {
+                return true;
+            }
+            let map = ctx.state.db.get_group_data_map(&ctx.from);
+            let tpl = map
+                .get("welcomeMessage")
+                .and_then(Value::as_str)
+                .unwrap_or("Bienvenido/a @user al grupo!");
+            let rendered = tpl.replace("@user", &format!("@{}", jid_tag(&ctx.sender)));
+            ctx.reply_with_mentions(rendered, vec![ctx.sender.clone()])
+                .await;
+            true
+        }
         "bot" => {
             let g = ctx.state.db.ensure_group(&ctx.from);
             handle_toggle(ctx, "botOnline", "Bot en Grupo", g.bot_online, false).await

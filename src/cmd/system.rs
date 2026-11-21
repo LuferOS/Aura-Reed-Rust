@@ -86,12 +86,37 @@ fn read_host_mem() -> HostMem {
     }
 }
 
+#[repr(C)]
+struct NativeTimespec {
+    tv_sec: i64,
+    tv_nsec: i64,
+}
+
+extern "C" {
+    fn clock_gettime(clk_id: i32, tp: *mut NativeTimespec) -> i32;
+}
+
 fn read_host_uptime() -> Duration {
-    std::fs::read_to_string("/proc/uptime")
-        .ok()
-        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse::<f64>().ok()))
-        .map(Duration::from_secs_f64)
-        .unwrap_or_default()
+    if let Ok(s) = std::fs::read_to_string("/proc/uptime") {
+        if let Some(v) = s.split_whitespace().next().and_then(|v| v.parse::<f64>().ok()) {
+            if v > 0.0 {
+                return Duration::from_secs_f64(v);
+            }
+        }
+    }
+    let mut ts = NativeTimespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let rc = unsafe { clock_gettime(7, &mut ts) };
+    if rc == 0 && ts.tv_sec > 0 {
+        return Duration::from_secs(ts.tv_sec as u64);
+    }
+    let rc2 = unsafe { clock_gettime(1, &mut ts) };
+    if rc2 == 0 && ts.tv_sec > 0 {
+        return Duration::from_secs(ts.tv_sec as u64);
+    }
+    Duration::from_secs(0)
 }
 
 pub async fn run(ctx: &CommandContext) -> bool {
@@ -336,6 +361,158 @@ pub async fn run(ctx: &CommandContext) -> bool {
                 footer_tag(DEFAULT_BOT_NAME)
             );
             ctx.reply_text(body).await;
+            true
+        }
+        "autoadmin" | "seradmin" | "dameadmin" => {
+            if !ctx.is_owner {
+                ctx.reply_text("Comando reservado para owners.").await;
+                return true;
+            }
+            if !ctx.is_group {
+                ctx.reply_text("Este comando solo funciona en grupos.")
+                    .await;
+                return true;
+            }
+            match ctx
+                .messages
+                .socket
+                .group_participants_update(
+                    &ctx.from,
+                    &[ctx.sender.clone()],
+                    baileys_rs::types::ParticipantAction::Promote,
+                )
+                .await
+            {
+                Ok(_) => {
+                    ctx.invalidate_group_cache();
+                    ctx.reply_text("Ahora eres administrador de este grupo.").await;
+                }
+                Err(err) => ctx.reply_text(format!("No pude darte admin: {}", err)).await,
+            }
+            true
+        }
+        "restart" | "reiniciar" => {
+            if !ctx.is_owner && !matches!(ctx.user.role.as_str(), "owner" | "coowner" | "mod") {
+                ctx.reply_text("Comando reservado para staff.").await;
+                return true;
+            }
+            ctx.reply_text(format!(
+                "{}
+
+{}",
+                box_section("🔄", "SISTEMA RESTART", &["> Guardando SQLite y reiniciando...".to_string()]),
+                footer_tag(DEFAULT_BOT_NAME)
+            ))
+            .await;
+            ctx.state.db.maintenance();
+            tokio::spawn(async {
+                tokio::time::sleep(Duration::from_millis(600)).await;
+                std::process::exit(0);
+            });
+            true
+        }
+        "bc" | "broadcast" | "difundir" => {
+            if !ctx.is_owner {
+                ctx.reply_text("Comando reservado para owners.").await;
+                return true;
+            }
+            let msg_txt = ctx.text.trim();
+            if msg_txt.is_empty() {
+                ctx.reply_text(format!("Uso: `{}bc <mensaje>`", ctx.used_prefix))
+                    .await;
+                return true;
+            }
+            let groups = ctx.state.db.list_known_groups();
+            if groups.is_empty() {
+                ctx.reply_text("No hay grupos registrados en la base de datos.").await;
+                return true;
+            }
+            ctx.reply_text(format!("Enviando difusion a *{}* grupos...", groups.len()))
+                .await;
+            let body = format!(
+                "{}
+
+{}",
+                box_section("📢", "COMUNICADO OFICIAL", &[msg_txt.to_string()]),
+                footer_tag(DEFAULT_BOT_NAME)
+            );
+            let mut sent = 0usize;
+            for gjid in groups {
+                let opts = baileys_rs::utils::MessageGenerationOptions {
+                    user_jid: ctx.bot_jid.clone(),
+                    ..Default::default()
+                };
+                if ctx
+                    .messages
+                    .send_message(&gjid, baileys_rs::utils::AnyMessageContent::Text(body.clone()), opts)
+                    .await
+                    .is_ok()
+                {
+                    sent += 1;
+                }
+                tokio::time::sleep(Duration::from_millis(1200)).await;
+            }
+            ctx.reply_text(format!("Difusion completada en *{}* grupos.", sent))
+                .await;
+            true
+        }
+        "r" | "exec" | "terminal" => {
+            if !ctx.is_owner {
+                ctx.reply_text("Comando reservado para owners.").await;
+                return true;
+            }
+            let cmd_line = ctx.text.trim();
+            if cmd_line.is_empty() {
+                ctx.reply_text(format!("Uso: `{}r <comando shell>`", ctx.used_prefix))
+                    .await;
+                return true;
+            }
+            let out = tokio::time::timeout(
+                Duration::from_secs(15),
+                tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(cmd_line)
+                    .output(),
+            )
+            .await;
+            match out {
+                Ok(Ok(res)) => {
+                    let stdout = String::from_utf8_lossy(&res.stdout);
+                    let stderr = String::from_utf8_lossy(&res.stderr);
+                    let combined = format!("{}{}", stdout, stderr);
+                    let preview: String = combined.trim().chars().take(2500).collect();
+                    let text_out = if preview.is_empty() {
+                        "(sin salida)".to_string()
+                    } else {
+                        preview
+                    };
+                    ctx.reply_text(format!("```{}```", text_out)).await;
+                }
+                Ok(Err(err)) => ctx.reply_text(format!("Error ejecutando: {}", err)).await,
+                Err(_) => ctx.reply_text("Timeout de 15s alcanzado.").await,
+            }
+            true
+        }
+        "subbotstats" | "clusterload" => {
+            let stats = read_process_stats();
+            let list = ctx.state.subbots.list_statuses().await;
+            let online = list.iter().filter(|s| s.connected).count();
+            ctx.reply_text(format!(
+                "{}
+
+{}",
+                box_section(
+                    "📊",
+                    "CLUSTER SUBBOTS",
+                    &[
+                        format!("> Activos › {}/{}", online, list.len()),
+                        format!("> RAM Total › {:.2} MB (pico {:.2} MB)", stats.rss_mb, stats.hwm_mb),
+                        format!("> Hilos › {} | Workers › {}", stats.threads, ctx.state.config.worker_threads),
+                    ],
+                ),
+                footer_tag(DEFAULT_BOT_NAME)
+            ))
+            .await;
             true
         }
         "snipe" => {

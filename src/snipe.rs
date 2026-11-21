@@ -2,8 +2,8 @@ use baileys_rs::types::WaMessage;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
-const MAX_CACHED_MESSAGES: usize = 256;
-const MAX_DELETED_PER_CHAT: usize = 5;
+const MAX_CACHED_MESSAGES: usize = 64;
+const MAX_DELETED_PER_CHAT: usize = 3;
 
 pub struct SnipeStore {
     cache: Mutex<(HashMap<String, WaMessage>, VecDeque<String>)>,
@@ -20,8 +20,8 @@ impl SnipeStore {
     pub fn new() -> Self {
         Self {
             cache: Mutex::new((
-                HashMap::with_capacity(64),
-                VecDeque::with_capacity(64),
+                HashMap::with_capacity(16),
+                VecDeque::with_capacity(16),
             )),
             deleted: Mutex::new(HashMap::new()),
         }
