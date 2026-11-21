@@ -469,7 +469,189 @@ pub async fn run(ctx: &CommandContext) -> bool {
             }
             true
         }
-        "toimg" => {
+        "emojivid" | "emoji" | "emoji-video" | "emojivideo" => {
+            let em = ctx.text.trim();
+            if em.is_empty() {
+                ctx.reply_text(format!("Envia un emoji. Ejemplo: `{}emoji 🔥`", ctx.used_prefix))
+                    .await;
+                return true;
+            }
+            let base = crate::config::ALYA_API.base_url.trim_end_matches('/');
+            let url = format!("{}/whatsapp/emoji", base);
+            let key = crate::config::ALYA_API.api_key.unwrap_or("");
+            match fetch_api_media_bytes(ctx, &url, &[("emoji", em), ("key", key)]).await {
+                Ok(raw) => {
+                    let is_webp = raw.len() >= 12 && &raw[0..4] == b"RIFF" && &raw[8..12] == b"WEBP";
+                    let out = if is_webp {
+                        Ok(raw)
+                    } else {
+                        encode_webp(&raw, true, &ctx.state.config.cache_dir).await
+                    };
+                    match out {
+                        Ok(webp) => {
+                            if let Err(err) = ctx.send_sticker_bytes(webp, true).await {
+                                ctx.reply_text(format!("Error enviando sticker emoji: {}", err)).await;
+                            }
+                        }
+                        Err(err) => ctx.reply_text(format!("Error convirtiendo emoji: {}", err)).await,
+                    }
+                }
+                Err(err) => ctx.reply_text(format!("Error generando emoji animado: {}", err)).await,
+            }
+            true
+        }
+        "qc" => {
+            let text = if !ctx.text.trim().is_empty() {
+                ctx.text.trim().to_string()
+            } else {
+                ctx.quoted_text().unwrap_or_default()
+            };
+            if text.is_empty() {
+                ctx.reply_text(format!("Uso: `{}qc <texto>` o responde a un mensaje.", ctx.used_prefix))
+                    .await;
+                return true;
+            }
+            let display = ctx
+                .user
+                .name
+                .as_deref()
+                .or(ctx.user.username.as_deref())
+                .or(ctx.push_name.as_deref())
+                .unwrap_or("Usuario");
+            let payload = serde_json::json!({
+                "type": "quote",
+                "format": "png",
+                "backgroundColor": "#1b1429",
+                "width": 512,
+                "height": 768,
+                "scale": 2,
+                "messages": [{
+                    "entities": [],
+                    "avatar": true,
+                    "from": {
+                        "id": 1,
+                        "name": display,
+                        "photo": { "url": "https://i.pinimg.com/736x/af/a3/24/afa324dff15091f93624bb470d60a592.jpg" }
+                    },
+                    "text": text,
+                    "replyMessage": {}
+                }]
+            });
+            match ctx.state.http.post("https://bot.lyo.su/quote/generate").json(&payload).send().await {
+                Ok(r) if r.status().is_success() => {
+                    if let Ok(json) = r.json::<Value>().await {
+                        if let Some(b64) = json.pointer("/result/image").and_then(Value::as_str) {
+                            if let Ok(png) = BASE64.decode(b64) {
+                                match encode_webp(&png, false, &ctx.state.config.cache_dir).await {
+                                    Ok(webp) => {
+                                        if let Err(err) = ctx.send_sticker_bytes(webp, false).await {
+                                            ctx.reply_text(format!("Error enviando qc: {}", err)).await;
+                                        }
+                                        return true;
+                                    }
+                                    Err(err) => {
+                                        ctx.reply_text(format!("Error WebP qc: {}", err)).await;
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ctx.reply_text("No se pudo generar la cita.").await;
+                }
+                Ok(r) => ctx.reply_text(format!("API QC HTTP {}", r.status().as_u16())).await,
+                Err(err) => ctx.reply_text(format!("Error en QC: {}", err)).await,
+            }
+            true
+        }
+        "spack" | "packs" | "stickerly" | "stickersearch" | "buscars" => {
+            let q = ctx.text.trim();
+            if q.is_empty() {
+                ctx.reply_text(format!("Uso: `{}spack <tema>`", ctx.used_prefix))
+                    .await;
+                return true;
+            }
+            let base = crate::config::ALYA_API.base_url.trim_end_matches('/');
+            let key = crate::config::ALYA_API.api_key.unwrap_or("");
+            let search = ctx
+                .state
+                .http
+                .get(format!("{}/stickerly/search", base))
+                .query(&[("query", q), ("key", key)])
+                .send()
+                .await;
+            let Ok(r) = search else {
+                ctx.reply_text("Error consultando Stickerly.").await;
+                return true;
+            };
+            let Ok(sj) = r.json::<Value>().await else {
+                ctx.reply_text("Respuesta invalida de Stickerly.").await;
+                return true;
+            };
+            let pack_url = sj
+                .get("data")
+                .or_else(|| sj.get("result"))
+                .and_then(Value::as_array)
+                .and_then(|arr| {
+                    arr.iter().find(|it| !it.get("isPaid").and_then(Value::as_bool).unwrap_or(false))
+                })
+                .and_then(|it| it.get("url").and_then(Value::as_str))
+                .map(str::to_string);
+            let Some(purl) = pack_url else {
+                ctx.reply_text("No encontre packs gratuitos para esa busqueda.").await;
+                return true;
+            };
+            let detail = ctx
+                .state
+                .http
+                .get(format!("{}/stickerly/detail", base))
+                .query(&[("url", purl.as_str()), ("key", key)])
+                .send()
+                .await;
+            let Ok(dr) = detail else {
+                ctx.reply_text("Error obteniendo detalle del pack.").await;
+                return true;
+            };
+            let Ok(dj) = dr.json::<Value>().await else {
+                ctx.reply_text("Detalle invalido del pack.").await;
+                return true;
+            };
+            let stickers = dj
+                .pointer("/data/stickers")
+                .or_else(|| dj.pointer("/result/stickers"))
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if stickers.is_empty() {
+                ctx.reply_text("El pack no contiene stickers descargables.").await;
+                return true;
+            }
+            ctx.reply_text(format!("Enviando 5 stickers del pack para *{}*...", q)).await;
+            for item in stickers.iter().take(5) {
+                let u = item
+                    .get("imageUrl")
+                    .or_else(|| item.get("url"))
+                    .or_else(|| item.get("image"))
+                    .and_then(Value::as_str);
+                if let Some(su) = u {
+                    if let Ok(resp) = ctx.state.http.get(su).send().await {
+                        if let Ok(b) = resp.bytes().await {
+                            let is_webp = b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP";
+                            let webp = if is_webp {
+                                Ok(b.to_vec())
+                            } else {
+                                encode_webp(&b, false, &ctx.state.config.cache_dir).await
+                            };
+                            if let Ok(wb) = webp {
+                                let _ = ctx.send_sticker_bytes(wb, false).await;
+                            }
+                        }
+                    }
+                }
+            }
+            true
+        }
+        "toimg" | "img" | "toimage" => {
             let Some(st) = find_quoted_sticker(&ctx.message) else {
                 ctx.reply_text(format!(
                     "Responde a un sticker con `{}toimg`.",

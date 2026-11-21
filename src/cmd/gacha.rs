@@ -152,6 +152,13 @@ pub async fn run(ctx: &CommandContext) -> bool {
             | "gachacheck"
             | "gcheck"
             | "giveallharem"
+            | "trade"
+            | "cambiar"
+            | "accepttrade"
+            | "aceptarintercambio"
+            | "setclaim"
+            | "setclaimmsg"
+            | "delclaimmsg"
             | "robwaifu"
             | "robarwaifu"
     );
@@ -939,6 +946,141 @@ pub async fn run(ctx: &CommandContext) -> bool {
                     vec![ctx.sender.clone(), target],
                 )
                 .await;
+            }
+            true
+        }
+        "trade" | "cambiar" => {
+            let target = ctx.target_jid();
+            if target == ctx.sender {
+                ctx.reply_text(format!(
+                    "Uso: `{}trade @usuario <tu carta> | <carta que pides>`",
+                    ctx.used_prefix
+                ))
+                .await;
+                return true;
+            }
+            let cleaned = ctx
+                .args
+                .iter()
+                .filter(|a| !a.starts_with('@'))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let Some((left, right)) = cleaned.split_once('|') else {
+                ctx.reply_text(format!(
+                    "Separa las cartas con `|`. Ejemplo: `{}trade @user Nino | Miku`",
+                    ctx.used_prefix
+                ))
+                .await;
+                return true;
+            };
+            let (l_name, l_var) = parse_char_and_variant(left);
+            let (r_name, r_var) = parse_char_and_variant(right);
+            let (Some(ch_a), Some(ch_b)) = (find_char(&l_name), find_char(&r_name)) else {
+                ctx.reply_text("Uno de los dos personajes no existe en el catalogo.").await;
+                return true;
+            };
+            let my_cards = ctx.state.db.get_user_harem(&ctx.from, &ctx.sender);
+            let their_cards = ctx.state.db.get_user_harem(&ctx.from, &target);
+            let Some(card_a) = my_cards.into_iter().find(|e| e.character_id == ch_a.id && l_var.is_none_or(|v| v == e.image_id)) else {
+                ctx.reply_text("No posees la carta que ofreces.").await;
+                return true;
+            };
+            let Some(card_b) = their_cards.into_iter().find(|e| e.character_id == ch_b.id && r_var.is_none_or(|v| v == e.image_id)) else {
+                ctx.reply_text("El otro usuario no posee la carta solicitada.").await;
+                return true;
+            };
+            let trade_key = format!("{}::{}", ctx.from, target);
+            if let Ok(mut map) = ctx.state.gacha_trades.lock() {
+                map.insert(
+                    trade_key,
+                    crate::context::GachaTradeOffer {
+                        from_jid: ctx.sender.clone(),
+                        to_jid: target.clone(),
+                        offer_char: card_a.character_id.clone(),
+                        offer_img: card_a.image_id,
+                        want_char: card_b.character_id.clone(),
+                        want_img: card_b.image_id,
+                        created_at: std::time::Instant::now(),
+                    },
+                );
+            }
+            ctx.reply_with_mentions(
+                format!(
+                    "*Propuesta de Intercambio*\n@{} ofrece *{}* (#{}) por *{}* (#{}) de @{}.\nEscribe `{}accepttrade` para aceptar (3 min).",
+                    jid_tag(&ctx.sender),
+                    card_a.character_id,
+                    card_a.image_id,
+                    card_b.character_id,
+                    card_b.image_id,
+                    jid_tag(&target),
+                    ctx.used_prefix
+                ),
+                vec![ctx.sender.clone(), target],
+            )
+            .await;
+            true
+        }
+        "accepttrade" | "aceptarintercambio" => {
+            let trade_key = format!("{}::{}", ctx.from, ctx.sender);
+            let offer = ctx.state.gacha_trades.lock().ok().and_then(|mut m| {
+                let o = m.remove(&trade_key)?;
+                if o.created_at.elapsed() > std::time::Duration::from_secs(180) {
+                    None
+                } else {
+                    Some(o)
+                }
+            });
+            let Some(o) = offer else {
+                ctx.reply_text("No tienes ningun intercambio pendiente o ya expiro.").await;
+                return true;
+            };
+            let now = unix_timestamp_seconds();
+            let ok1 = ctx.state.db.transfer_gacha_card(&ctx.from, &o.offer_char, o.offer_img, &o.from_jid, &o.to_jid, now);
+            let ok2 = if ok1 {
+                ctx.state.db.transfer_gacha_card(&ctx.from, &o.want_char, o.want_img, &o.to_jid, &o.from_jid, now)
+            } else {
+                false
+            };
+            if ok1 && ok2 {
+                ctx.reply_with_mentions(
+                    format!(
+                        "*Intercambio completado!*\n@{} recibio *{}* (#{})\n@{} recibio *{}* (#{})",
+                        jid_tag(&o.to_jid),
+                        o.offer_char,
+                        o.offer_img,
+                        jid_tag(&o.from_jid),
+                        o.want_char,
+                        o.want_img
+                    ),
+                    vec![o.from_jid, o.to_jid],
+                )
+                .await;
+            } else {
+                if ok1 {
+                    let _ = ctx.state.db.transfer_gacha_card(&ctx.from, &o.offer_char, o.offer_img, &o.to_jid, &o.from_jid, now);
+                }
+                ctx.reply_text("El intercambio fallo porque una de las cartas cambio de dueno.").await;
+            }
+            true
+        }
+        "setclaim" | "setclaimmsg" | "delclaimmsg" => {
+            let u = ctx.state.db.ensure_user(&ctx.sender, None);
+            let mut map = serde_json::from_str::<serde_json::Value>(&u.data_json)
+                .ok()
+                .and_then(|v| v.as_object().cloned())
+                .unwrap_or_default();
+            if ctx.cmd_name == "delclaimmsg" || ctx.text.trim().is_empty() {
+                map.remove("claimMsg");
+                let json = serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string());
+                ctx.state.db.update_user_economy(&ctx.sender, u.coins, u.bank, &json);
+                ctx.reply_text("Mensaje personalizado de claim restablecido.").await;
+            } else {
+                let clipped: String = ctx.text.trim().chars().take(120).collect();
+                map.insert("claimMsg".to_string(), serde_json::Value::String(clipped.clone()));
+                let json = serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string());
+                ctx.state.db.update_user_economy(&ctx.sender, u.coins, u.bank, &json);
+                ctx.reply_text(format!("Mensaje de claim guardado: *{}*", clipped)).await;
             }
             true
         }

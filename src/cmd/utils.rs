@@ -65,6 +65,98 @@ pub async fn run(ctx: &CommandContext) -> bool {
             .await;
             true
         }
+        "hd" | "remini" | "upscale" | "enhance" => {
+            let target_img = match find_quoted_media(ctx) {
+                Some(ViewOnceTarget::Image(img)) => Some(img),
+                _ => ctx.message.message.as_ref().and_then(|p| {
+                    let n = normalize_message_content(p);
+                    n.image_message.as_ref().map(|i| {
+                        let inner: &ImageMessage = Borrow::borrow(i);
+                        inner.clone()
+                    })
+                }),
+            };
+            let Some(img) = target_img else {
+                ctx.reply_text(format!("Envia o responde a una imagen con `{}hd`.", ctx.used_prefix))
+                    .await;
+                return true;
+            };
+            let scale = if ctx.args.first().map(String::as_str) == Some("4") { "4" } else { "2" };
+            let dl = DownloadableMessage {
+                media_key: img.media_key,
+                direct_path: img.direct_path,
+                url: img.url,
+            };
+            let raw = match download_content_from_message(&dl, MediaType::Image, &MediaDownloadOptions { timeout_ms: Some(15_000), ..Default::default() }).await {
+                Ok(b) => b,
+                Err(err) => {
+                    ctx.reply_text(format!("Error descargando imagen: {}", err)).await;
+                    return true;
+                }
+            };
+            let boundary = "----AuraReedRustBoundary987654";
+            let mut body: Vec<u8> = Vec::with_capacity(raw.len() + 512);
+            body.extend_from_slice(format!("--{b}\r\nContent-Disposition: form-data; name=\"method\"\r\n\r\nlocal\r\n--{b}\r\nContent-Disposition: form-data; name=\"scale\"\r\n\r\n{s}\r\n--{b}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"image.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n", b = boundary, s = scale).as_bytes());
+            body.extend_from_slice(&raw);
+            body.extend_from_slice(format!("\r\n--{b}--\r\n", b = boundary).as_bytes());
+
+            let url = format!(
+                "{}/tools/upscale?key={}",
+                crate::config::ALYA_API.base_url.trim_end_matches('/'),
+                crate::config::ALYA_API.api_key.unwrap_or("")
+            );
+            ctx.reply_text(format!("Mejorando imagen a {}x...", scale)).await;
+            match ctx
+                .state
+                .http
+                .post(&url)
+                .header("Content-Type", format!("multipart/form-data; boundary={}", boundary))
+                .body(body)
+                .send()
+                .await
+            {
+                Ok(r) if r.status().is_success() => {
+                    let mime = r
+                        .headers()
+                        .get("content-type")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("image/png")
+                        .to_string();
+                    if let Ok(out) = r.bytes().await {
+                        if let Err(err) = ctx
+                            .send_image_bytes(out.to_vec(), Some(format!("Imagen mejorada ({}x)", scale)), Vec::new(), &mime)
+                            .await
+                        {
+                            ctx.reply_text(format!("Error enviando imagen HD: {}", err)).await;
+                        }
+                    }
+                }
+                Ok(r) => ctx.reply_text(format!("Error upscale: HTTP {}", r.status().as_u16())).await,
+                Err(err) => ctx.reply_text(format!("Error upscale: {}", err)).await,
+            }
+            true
+        }
+        "mp4hd" | "video4k" | "hdvideo" => {
+            let Some(ViewOnceTarget::Video(vid)) = find_quoted_media(ctx) else {
+                ctx.reply_text(format!("Responde a un video con `{}mp4hd`.", ctx.used_prefix))
+                    .await;
+                return true;
+            };
+            let dl = DownloadableMessage {
+                media_key: vid.media_key,
+                direct_path: vid.direct_path,
+                url: vid.url,
+            };
+            match download_content_from_message(&dl, MediaType::Video, &MediaDownloadOptions { timeout_ms: Some(25_000), ..Default::default() }).await {
+                Ok(bytes) => {
+                    if let Err(err) = ctx.send_video_bytes(bytes, Some("Video optimizado H.264".to_string()), "video/mp4").await {
+                        ctx.reply_text(format!("Error procesando video: {}", err)).await;
+                    }
+                }
+                Err(err) => ctx.reply_text(format!("Error descargando video: {}", err)).await,
+            }
+            true
+        }
         "read" => {
             let Some(media) = find_quoted_media(ctx) else {
                 ctx.reply_text("Responde a una imagen, video o audio (incluidos los de una sola vista) con `.read`.")

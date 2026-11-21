@@ -291,6 +291,17 @@ pub async fn handle_message(
         if self_mode && !from_me && !is_owner {
             return;
         }
+        let cmd_blocked = gmap
+            .get("restrictedCmds")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|arr| {
+                arr.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .any(|c| c.eq_ignore_ascii_case(&cmd_name))
+            });
+        if cmd_blocked && !is_owner && !matches!(cmd_name.as_str(), "restrictcmd" | "cmdrestrict" | "blockcmd") {
+            return;
+        }
     }
 
     if is_group && !is_owner && !matches!(user.role.as_str(), "owner" | "coowner" | "mod") {

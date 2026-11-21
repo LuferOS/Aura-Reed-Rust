@@ -290,6 +290,76 @@ pub async fn run(ctx: &CommandContext) -> bool {
                 .await;
             true
         }
+        "alerts" | "alertas" | "adminalerts" => {
+            if !require_admin(ctx, false).await {
+                return true;
+            }
+            let map = ctx.state.db.get_group_data_map(&ctx.from);
+            let cur = map.get("alerts").and_then(Value::as_bool).unwrap_or(false);
+            let raw = ctx.args.first().map(String::as_str).unwrap_or("");
+            let Some(enabled) = parse_toggle(raw) else {
+                ctx.reply_text(format!(
+                    "*Alertas del Grupo*\nEstado: *{}*\nUso: `{}alerts on|off`",
+                    if cur { "Activadas" } else { "Desactivadas" },
+                    ctx.used_prefix
+                ))
+                .await;
+                return true;
+            };
+            ctx.state
+                .db
+                .set_group_data_field(&ctx.from, "alerts", Value::Bool(enabled));
+            ctx.reply_text(format!(
+                "Alertas *{}*.",
+                if enabled { "activadas" } else { "desactivadas" }
+            ))
+            .await;
+            true
+        }
+        "restrictcmd" | "cmdrestrict" | "blockcmd" => {
+            if !require_admin(ctx, false).await {
+                return true;
+            }
+            let mut map = ctx.state.db.get_group_data_map(&ctx.from);
+            let mut list: Vec<String> = map
+                .get("restrictedCmds")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default();
+            let target_cmd = ctx.args.first().map(|s| s.trim_start_matches('.').to_ascii_lowercase()).unwrap_or_default();
+            if target_cmd.is_empty() {
+                ctx.reply_text(format!(
+                    "*Comandos restringidos:* {}\nUso: `{}restrictcmd <comando>` (alterna bloqueo)",
+                    if list.is_empty() { "ninguno".to_string() } else { list.join(", ") },
+                    ctx.used_prefix
+                ))
+                .await;
+                return true;
+            }
+            let blocked = if let Some(pos) = list.iter().position(|x| x == &target_cmd) {
+                list.remove(pos);
+                false
+            } else {
+                list.push(target_cmd.clone());
+                true
+            };
+            map.insert(
+                "restrictedCmds".to_string(),
+                Value::Array(list.into_iter().map(Value::String).collect()),
+            );
+            ctx.state.db.set_group_data_field(
+                &ctx.from,
+                "restrictedCmds",
+                map.remove("restrictedCmds").unwrap_or(Value::Array(Vec::new())),
+            );
+            ctx.reply_text(format!(
+                "Comando `{}` ahora esta *{}* en este grupo.",
+                target_cmd,
+                if blocked { "restringido" } else { "permitido" }
+            ))
+            .await;
+            true
+        }
         "bot" => {
             let g = ctx.state.db.ensure_group(&ctx.from);
             handle_toggle(ctx, "botOnline", "Bot en Grupo", g.bot_online, false).await
@@ -1031,7 +1101,7 @@ pub async fn run(ctx: &CommandContext) -> bool {
             .await;
             true
         }
-        "del" | "delete" | "borrar" => {
+        "del" | "delete" | "borrar" | "dmsg" | "forcedel" | "ownerdel" => {
             if ctx.is_group && !require_admin(ctx, true).await {
                 return true;
             }

@@ -198,6 +198,47 @@ pub async fn run(ctx: &CommandContext) -> bool {
             }
             true
         }
+        "scsearch" | "scbuscar" | "scb" | "scs" => {
+            if query.is_empty() {
+                ctx.reply_text(format!("Uso: `{}scsearch <cancion>`", ctx.used_prefix))
+                    .await;
+                return true;
+            }
+            let delirius = crate::config::DELIRIUS_API.base_url.trim_end_matches('/');
+            let resp = ctx
+                .state
+                .http
+                .get(format!("{}/search/soundcloud", delirius))
+                .query(&[("q", query), ("limit", "5")])
+                .send()
+                .await;
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    let json: Value = r.json().await.unwrap_or(Value::Null);
+                    let items = extract_items(&json);
+                    if items.is_empty() {
+                        ctx.reply_text("No se encontraron pistas en SoundCloud.").await;
+                        return true;
+                    }
+                    let lines = items
+                        .iter()
+                        .take(5)
+                        .enumerate()
+                        .map(|(i, it)| {
+                            let title = str_field(it, &["title", "name"]).unwrap_or("Pista");
+                            let author = str_field(it, &["artist", "author", "user"]).unwrap_or("-");
+                            let url = str_field(it, &["link", "url"]).unwrap_or("");
+                            format!("{}. *{}* — {}\n   {}", i + 1, title, author, url)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    ctx.reply_text(format!("*Resultados SoundCloud*\n\n{}", lines)).await;
+                }
+                Ok(r) => ctx.reply_text(format!("Error SoundCloud: HTTP {}", r.status().as_u16())).await,
+                Err(err) => ctx.reply_text(format!("Error SoundCloud: {}", err)).await,
+            }
+            true
+        }
         "lrc" | "lyrics" | "letra" => {
             if query.is_empty() {
                 ctx.reply_text(format!("Uso: `{}lrc <cancion>`", ctx.used_prefix))

@@ -199,12 +199,14 @@ async fn run_bot(cfg: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
         subbots: Arc::new(SubBotManager::new(128)),
         http: BotState::build_http_client(),
         cmd_semaphore: Arc::new(Semaphore::new(8)),
+        ffmpeg_sem: Arc::new(Semaphore::new(2)),
         creds_lock: Arc::new(Mutex::new(())),
         proposals: std::sync::Mutex::new(std::collections::HashMap::new()),
         spam_tracker: std::sync::Mutex::new(std::collections::HashMap::new()),
         group_meta_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         hangman_games: std::sync::Mutex::new(std::collections::HashMap::new()),
         group_activity: std::sync::Mutex::new(std::collections::HashMap::new()),
+        gacha_trades: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     if cfg.start_subbots {
@@ -332,7 +334,7 @@ async fn run_bot(cfg: AppConfig) -> Result<(), Box<dyn std::error::Error>> {
                             };
                             st_c.debug.active_tasks.fetch_add(1, Ordering::Relaxed);
                                                         let _ = tokio::time::timeout(
-                                Duration::from_secs(25),
+                                Duration::from_secs(180),
                                 Box::pin(handler::handle_message(st_c.clone(), sock_c, message, is_offline)),
                             )
                             .await;

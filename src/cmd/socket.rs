@@ -62,6 +62,7 @@ fn render_category_block(p: &str, cat: &str) -> Option<String> {
                 (&["fb", "facebook", "fbreels"], "Descarga videos de Facebook."),
                 (&["x", "twitter", "tw"], "Descarga videos de X/Twitter."),
                 (&["apk", "apkdl", "app"], "Descarga archivos APK de Android."),
+                (&["sc", "scplay", "dsc"], "Descarga audio de SoundCloud (MP3/doc)."),
                 (&["mf", "mediafire", "ssweb"], "MediaFire y capturas web."),
             ],
             p,
@@ -73,6 +74,7 @@ fn render_category_block(p: &str, cat: &str) -> Option<String> {
                 (&["tts", "ttsearch"], "Busca videos en TikTok."),
                 (&["sps", "spsearch"], "Busca canciones en Spotify."),
                 (&["pin", "pinterest"], "Busca imagenes en Pinterest."),
+                (&["scsearch", "scb"], "Busca pistas en SoundCloud."),
                 (&["lrc", "lyrics", "letra"], "Busca letras de canciones."),
             ],
             p,
@@ -83,6 +85,7 @@ fn render_category_block(p: &str, cat: &str) -> Option<String> {
                 (&["s", "sticker", "stiker"], "Crea stickers de imagenes o videos."),
                 (&["brat", "bratv"], "Stickers de texto estilo Brat y animado."),
                 (&["emojimix", "ekitchen"], "Combina dos emojis en un sticker."),
+                (&["emojivid", "qc", "spack"], "Emoji animado, quote sticker y packs."),
                 (&["setmeta", "toimg"], "Metadata de sticker y sticker a imagen."),
             ],
             p,
@@ -97,7 +100,7 @@ fn render_category_block(p: &str, cat: &str) -> Option<String> {
                 (&["warn", "delwarn", "warns", "setwarnlimit"], "Sistema de advertencias."),
                 (&["mute", "unmute", "del", "tempmsg"], "Silenciar, borrar y temporales."),
                 (&["welcome", "bye", "setwelcome", "testwelcome"], "Bienvenida y despedida."),
-                (&["banchat", "unbanchat", "disable", "enable"], "Baneo de chat y categorias."),
+                (&["banchat", "unbanchat", "disable", "enable", "restrictcmd"], "Baneo de chat, categorias y comandos."),
                 (&["topactivos", "setprefix", "nsfw", "leave"], "Actividad, prefijo y salida."),
             ],
             p,
@@ -129,6 +132,7 @@ fn render_category_block(p: &str, cat: &str) -> Option<String> {
                 (&["winfo", "wimage", "animelist", "animeinfo"], "Catalogo de personajes y series."),
                 (&["ginfo", "gcheck", "vote", "waifusboard", "htop"], "Estadisticas y rankings."),
                 (&["sell", "wshop", "buyc", "removerventa"], "Tienda de cartas del grupo."),
+                (&["trade", "accepttrade", "setclaim"], "Intercambio de cartas y mensaje claim."),
                 (&["givechar", "giveallharem", "delchar", "setfav", "delfav", "robwaifu"], "Gestion de harem."),
             ],
             p,
@@ -174,7 +178,7 @@ fn render_category_block(p: &str, cat: &str) -> Option<String> {
         "utils" => Some(menu_category_box(
             "UTILS",
             &[
-                (&["read", "compress"], "Revela ViewOnce y comprime videos."),
+                (&["read", "compress", "hd", "mp4hd"], "ViewOnce, compresor, upscale HD y H.264."),
                 (&["lid", "get", "report"], "Identificadores, HTTP GET y reportes."),
                 (&["setrole", "banuser", "unbanuser"], "Roles y baneos (owner)."),
             ],
@@ -184,7 +188,7 @@ fn render_category_block(p: &str, cat: &str) -> Option<String> {
             "SOCKET",
             &[
                 (&["menu", "help", "bots"], "Menu interactivo y lista de SubBots."),
-                (&["code", "stopsub"], "Vincular SubBot por codigo y detener."),
+                (&["code", "logout", "stopsub"], "Vincular, cerrar y detener SubBots."),
                 (&["setbotname", "setcurrency", "setbanner", "self"], "Personalizacion del bot."),
             ],
             p,
@@ -637,6 +641,17 @@ pub async fn run(ctx: &CommandContext) -> bool {
                     }
                 }
             });
+            true
+        }
+        "logout" | "cerrarsesion" | "desconectar" => {
+            let phone: String = jid_tag(&ctx.sender).chars().filter(|c| c.is_ascii_digit()).collect();
+            if ctx.state.subbots.stop(&phone).await {
+                let dir = ctx.state.config.sub_sessions_dir.join(&phone);
+                let _ = tokio::fs::remove_dir_all(dir).await;
+                ctx.reply_text(format!("Sesion de SubBot `{}` cerrada correctamente.", phone)).await;
+            } else {
+                ctx.reply_text("No tienes una sesion de SubBot activa asociada a tu numero.").await;
+            }
             true
         }
         "stopsub" => {
